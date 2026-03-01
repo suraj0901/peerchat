@@ -1,3 +1,4 @@
+import type { DataConnection } from "peerjs";
 import { StateMachine } from "./base-state-machine";
 
 
@@ -27,10 +28,10 @@ const dataConnectionTransitions: Record<DataConnectionState, Partial<Record<Data
  */
 export class DataConnectionStateMachine {
     public readonly stateMachine: StateMachine<DataConnectionState, DataConnectionEvent>;
-    private readonly conn: any; // Replace with actual DataConnection type
+    private readonly conn: DataConnection; // Replace with actual DataConnection type
     private readonly eventListeners: Array<() => void> = [];
 
-    constructor(conn: any) {
+    constructor(conn: DataConnection) {
         this.conn = conn;
         this.stateMachine = new StateMachine<DataConnectionState, DataConnectionEvent>('connecting', dataConnectionTransitions);
 

@@ -1,4 +1,4 @@
-import Peer, { PeerOptions } from "peerjs";
+import Peer, { DataConnection, PeerOptions } from "peerjs";
 import { StateMachine } from "./base-state-machine";
 import { DataConnectionStateMachine } from "./data-connection-sm";
 import { MediaConnectionStateMachine } from "./media-connection-sm";
@@ -34,8 +34,8 @@ export class PeerStateMachine {
     private readonly peer: Peer; // Replace with actual Peer type from 'peerjs'
     private readonly eventListeners: Array<() => void> = [];
 
-    constructor(option: PeerOptions) {
-        this.peer = new Peer(option);
+    constructor(peer: Peer) {
+        this.peer = peer
         this.stateMachine = new StateMachine<PeerState, PeerEvent>('connecting', peerTransitions);
 
         // Listen to PeerJS events
@@ -87,29 +87,33 @@ export class PeerStateMachine {
         this.cleanup();
     }
 
-    // call(remotePeerId: string, localStream: MediaStream) {
-    //     const call = this.peer.call(remotePeerId, localStream);
-    //     return new MediaConnectionStateMachine(call);
-    // }
+    call(remotePeerId: string, localStream: MediaStream) {
+        const call = this.peer.call(remotePeerId, localStream);
+        return new MediaConnectionStateMachine(call);
+    }
 
-    // onIncomingCall(handler: (call: MediaConnectionStateMachine) => void) {
-    //     this.peer.on('call', (call: any) => {
-    //         const mediaConn = new MediaConnectionStateMachine(call, 'incoming')
-    //         handler(mediaConn);
-    //     });
-    // }
+    onIncomingCall(handler: (call: MediaConnectionStateMachine) => void) {
+        const wrapper =  (call: any) => {
+            const mediaConn = new MediaConnectionStateMachine(call, 'incoming')
+            handler(mediaConn);
+        }
+        this.peer.on('call',  wrapper);
+        this.eventListeners.push(() => this.peer.off('call', wrapper));
+    }
 
-    // connect(remotePeerId: string) {
-    //     const conn = this.peer.connect(remotePeerId);
-    //     return new DataConnectionStateMachine(conn);
-    // }
+    connect(remotePeerId: string) {
+        const conn = this.peer.connect(remotePeerId);
+        return new DataConnectionStateMachine(conn);
+    }
 
-    // onIncomingConnection(handler: (conn: DataConnectionStateMachine) => void) {
-    //     this.peer.on('connection', (conn: any) => {
-    //         const dataConn = new DataConnectionStateMachine(conn);
-    //         handler(dataConn);
-    //     });
-    // }
+    onIncomingConnection(handler: (conn: DataConnectionStateMachine) => void) {
+        const wrapper = (conn: DataConnection) => {
+            const dataConn = new DataConnectionStateMachine(conn);
+            handler(dataConn);
+        }
+        this.peer.on('connection', wrapper);
+        this.eventListeners.push(() => this.peer.off('connection', wrapper));
+    }
 
     /** Clean up event listeners (internal). */
     private cleanup(): void {
