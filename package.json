@@ -1,12 +1,51 @@
 {
   "name": "peerchat",
-  "module": "src/index.ts",
+  "version": "0.1.0",
+  "description": "A high-level, event-driven wrapper around PeerJS for video calls and data channels",
   "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "peerjs",
+    "webrtc",
+    "peer-to-peer",
+    "video-call",
+    "data-channel",
+    "p2p",
+    "real-time"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/suraj-jha/peerchat"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "peerjs": "^1.5.5"
   },
   "dependencies": {
     "neverthrow": "^8.2.0",

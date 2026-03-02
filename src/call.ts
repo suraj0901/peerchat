@@ -1,7 +1,7 @@
 import type { MediaConnection } from "peerjs";
 import { TypedEmitter } from "./typed-emitter";
 import { MediaConnectionStateMachine } from "./state-machine";
-import type { CallMediaManager } from "./media";
+import { MediaAcquirer, type CallMediaManager } from "./media";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -87,9 +87,14 @@ export class Call extends TypedEmitter<CallEvents> {
 
     /**
      * Answer an incoming call. Only valid when `status === 'ringing'`.
+     *
+     * Acquires local media (camera + microphone by default) and answers the
+     * call. Returns a `ResultAsync` that resolves on success.
      */
-    answer(stream?: MediaStream): void {
-        this._sm.answer(stream);
+    answer(constraints: MediaStreamConstraints = { audio: true, video: true }) {
+        return MediaAcquirer.getUserMedia(constraints).map((stream) => {
+            this._sm.answer(stream);
+        });
     }
 
     /**
