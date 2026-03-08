@@ -3,7 +3,7 @@ import { DeviceInputController } from "./device-input-controller";
 import { LocalMedia } from "./local-media";
 import { ScreenShareController } from "./screen-share-controller";
 
-export class CallMediaManager {
+export class MediaManager {
   public localMedia: LocalMedia;
   private deviceInput: DeviceInputController;
   private audioOutput: AudioOutputController;

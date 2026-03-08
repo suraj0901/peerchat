@@ -1,7 +1,6 @@
-import Peer, { DataConnection, PeerOptions } from "peerjs";
+import Peer from "peerjs";
 import { StateMachine } from "./base-state-machine";
-import { DataConnectionStateMachine } from "./data-connection-sm";
-import { MediaConnectionStateMachine } from "./media-connection-sm";
+import { EventBindings } from "./event-bindings";
 
 export type PeerState =
     | 'connecting'
@@ -27,38 +26,24 @@ const peerTransitions: Record<PeerState, Partial<Record<PeerEvent, PeerState>>> 
 };
 
 /**
-* Wraps a PeerJS Peer instance and manages its state.
-*/
+ * Wraps a PeerJS Peer instance and manages its signaling-server lifecycle.
+ */
 export class PeerStateMachine {
     public readonly stateMachine: StateMachine<PeerState, PeerEvent>;
-    private readonly peer: Peer; // Replace with actual Peer type from 'peerjs'
-    private readonly eventListeners: Array<() => void> = [];
+    private readonly peer: Peer;
+    private readonly bindings = new EventBindings();
 
     constructor(peer: Peer) {
-        this.peer = peer
+        this.peer = peer;
         this.stateMachine = new StateMachine<PeerState, PeerEvent>('connecting', peerTransitions);
 
-        // Listen to PeerJS events
-        const openHandler = () => this.stateMachine.transition('OPEN');
-        const disconnectedHandler = () => this.stateMachine.transition('DISCONNECTED');
-        const errorHandler = (err: any) => {
+        this.bindings.bind(peer, 'open', () => this.stateMachine.transition('OPEN'));
+        this.bindings.bind(peer, 'disconnected', () => this.stateMachine.transition('DISCONNECTED'));
+        this.bindings.bind(peer, 'error', (err: any) => {
             console.error('Peer error:', err);
             this.stateMachine.transition('ERROR');
-        };
-        const closeHandler = () => this.stateMachine.transition('CLOSE');
-
-        this.peer.on('open', openHandler);
-        this.peer.on('disconnected', disconnectedHandler);
-        this.peer.on('error', errorHandler);
-        this.peer.on('close', closeHandler);
-
-        // Store cleanup functions
-        this.eventListeners.push(
-            () => this.peer.off('open', openHandler),
-            () => this.peer.off('disconnected', disconnectedHandler),
-            () => this.peer.off('error', errorHandler),
-            () => this.peer.off('close', closeHandler)
-        );
+        });
+        this.bindings.bind(peer, 'close', () => this.stateMachine.transition('CLOSE'));
     }
 
     /** Manually disconnect from the server (keeps peer ID). */
@@ -84,40 +69,6 @@ export class PeerStateMachine {
         if (this.stateMachine.currentState === 'closed') return;
         this.peer.destroy();
         // The 'close' event will transition to closed, but we also clean up listeners.
-        this.cleanup();
-    }
-
-    call(remotePeerId: string, localStream: MediaStream) {
-        const call = this.peer.call(remotePeerId, localStream);
-        return new MediaConnectionStateMachine(call);
-    }
-
-    onIncomingCall(handler: (call: MediaConnectionStateMachine) => void) {
-        const wrapper =  (call: any) => {
-            const mediaConn = new MediaConnectionStateMachine(call, 'incoming')
-            handler(mediaConn);
-        }
-        this.peer.on('call',  wrapper);
-        this.eventListeners.push(() => this.peer.off('call', wrapper));
-    }
-
-    connect(remotePeerId: string) {
-        const conn = this.peer.connect(remotePeerId);
-        return new DataConnectionStateMachine(conn);
-    }
-
-    onIncomingConnection(handler: (conn: DataConnectionStateMachine) => void) {
-        const wrapper = (conn: DataConnection) => {
-            const dataConn = new DataConnectionStateMachine(conn);
-            handler(dataConn);
-        }
-        this.peer.on('connection', wrapper);
-        this.eventListeners.push(() => this.peer.off('connection', wrapper));
-    }
-
-    /** Clean up event listeners (internal). */
-    private cleanup(): void {
-        this.eventListeners.forEach(unsub => unsub());
-        this.eventListeners.length = 0;
+        this.bindings.cleanup();
     }
 }

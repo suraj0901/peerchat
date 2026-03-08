@@ -1,10 +1,11 @@
 import Peer, { type DataConnection, type MediaConnection, type PeerOptions } from "peerjs";
 import { TypedEmitter } from "./typed-emitter";
-import { PeerStateMachine } from "./state-machine";
+import { PeerStateMachine, type PeerState } from "./state-machine";
 import { MediaAcquirer } from "./media";
 import { Call } from "./call";
 import { Channel } from "./channel";
 import { Option } from "./util";
+import type { MappedState } from "./state-machine/base-state-machine";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -17,6 +18,18 @@ export type PeerChatEvents = {
     incomingCall: (call: Call) => void;
     incomingConnection: (channel: Channel) => void;
     error: (error: Error) => void;
+};
+
+// ---------------------------------------------------------------------------
+// Status mapping
+// ---------------------------------------------------------------------------
+
+const STATUS_MAP: Record<PeerState, PeerChatStatus> = {
+    connecting: "connecting",
+    connected: "ready",
+    disconnected: "disconnected",
+    failed: "disconnected",
+    closed: "destroyed",
 };
 
 // ---------------------------------------------------------------------------
@@ -58,7 +71,7 @@ export type PeerChatEvents = {
 export class PeerChat extends TypedEmitter<PeerChatEvents> {
     private readonly _peerSM: PeerStateMachine;
     private readonly _peer: Peer;
-    private _status: PeerChatStatus = "connecting";
+    private readonly _mappedStatus: MappedState<PeerChatStatus>;
     private _activeCall: Option<Call> = Option.none;
 
     constructor(id?: string, options?: PeerOptions) {
@@ -66,46 +79,40 @@ export class PeerChat extends TypedEmitter<PeerChatEvents> {
         this._peer = id ? new Peer(id, options) : options ? new Peer(options) : new Peer();
         this._peerSM = new PeerStateMachine(this._peer);
 
-        // --- Map internal peer states → simplified public status ---
+        // Derived status — single source of truth from the state machine
+        this._mappedStatus = this._peerSM.stateMachine.mapState(s => STATUS_MAP[s]);
+        this._mappedStatus.onChange((newStatus) => {
+            this.emit("status", newStatus);
+        });
+
+        // Side-effect: error event on 'failed' state
         this._peerSM.stateMachine.onStateChange((newState) => {
-            switch (newState) {
-                case "connected":
-                    this._setStatus("ready");
-                    break;
-                case "disconnected":
-                    this._setStatus("disconnected");
-                    break;
-                case "failed":
-                    this.emit("error", new Error("Peer connection failed"));
-                    this._setStatus("disconnected");
-                    break;
-                case "closed":
-                    this._setStatus("destroyed");
-                    break;
+            if (newState === "failed") {
+                this.emit("error", new Error("Peer connection failed"));
             }
         });
 
         // --- Incoming calls ---
-        // Listen directly on the raw Peer so we can create high-level Call
-        // objects without the intermediate MediaConnectionStateMachine.
         this._peer.on("call", (mediaConn: MediaConnection) => {
-            const call = new Call(mediaConn, "incoming");
+            this.emit("incomingCall", (constraints: MediaStreamConstraints = { audio: true, video: true }) => {
 
-            // Auto-reject if already in a call
-            if (Option.isSome(this._activeCall)) {
-                console.warn("Already in a call — automatically rejecting incoming call.");
-                call.reject();
-                return;
-            }
+                const call = new Call(mediaConn, "incoming");
 
-            this._activeCall = Option.some(call);
-            call.on("status", (status) => {
-                if (status === "ended") {
-                    this._activeCall = Option.none;
+                // Auto-reject if already in a call
+                if (Option.isSome(this._activeCall)) {
+                    console.warn("Already in a call — automatically rejecting incoming call.");
+                    call.reject();
+                    return;
                 }
-            });
 
-            this.emit("incomingCall", call);
+                this._activeCall = Option.some(call);
+                call.on("status", (status) => {
+                    if (status === "ended") {
+                        this._activeCall = Option.none;
+                    }
+                });
+                return call;
+            });
         });
 
         // --- Incoming data connections ---
@@ -124,7 +131,7 @@ export class PeerChat extends TypedEmitter<PeerChatEvents> {
 
     /** Current connection status. */
     get status(): PeerChatStatus {
-        return this._status;
+        return this._mappedStatus.get();
     }
 
     // -- Actions ---------------------------------------------------------------
@@ -191,13 +198,5 @@ export class PeerChat extends TypedEmitter<PeerChatEvents> {
         }
         this._peerSM.destroy();
         this.removeAllListeners();
-    }
-
-    // -- Internals -------------------------------------------------------------
-
-    private _setStatus(status: PeerChatStatus): void {
-        if (this._status === status) return;
-        this._status = status;
-        this.emit("status", status);
     }
 }

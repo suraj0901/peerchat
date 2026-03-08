@@ -4,9 +4,9 @@ import {
   NoVideoSenderError,
   NoVideoTrackError,
   ReplaceTrackError,
-} from "../errors";
+} from "../../errors";
 import { LocalMedia } from "./local-media";
-import { MediaAcquirer } from "./media-acquirer";
+import { MediaAcquirer } from "../media-acquirer";
 
 export class DeviceInputController {
   constructor(

@@ -1,6 +1,7 @@
 import { MediaConnection } from "peerjs";
 import { StateMachine } from "./base-state-machine";
 import { CallMediaManager } from "../media";
+import { EventBindings } from "./event-bindings";
 
 export type MediaConnectionState =
   | "connecting" // outgoing call or after answering
@@ -47,7 +48,7 @@ export class MediaConnectionStateMachine {
   public readonly media: CallMediaManager;
 
   private readonly conn: MediaConnection;
-  private readonly eventListeners: Array<() => void> = [];
+  private readonly bindings = new EventBindings();
 
   get remotePeerId(): string {
     return this.conn.peer;
@@ -63,45 +64,44 @@ export class MediaConnectionStateMachine {
   ) {
     this.conn = conn;
     this.media = new CallMediaManager(conn.localStream, conn.peerConnection);
-    
+
     this.stateMachine = new StateMachine<
       MediaConnectionState,
       MediaConnectionEvent
     >(initialStatus, mediaConnectionTransitions);
 
-    const streamHandler = (stream: MediaStream) => {
-      this.stateMachine.transition("STREAM");
+    this.stateMachine.onStateChange((newState, oldState) => {
+      console.debug(`${oldState} -> ${newState}`);
+    })
+
+    this.bindings.bind(conn, "stream", (stream: MediaStream) => {
       this.remoteStream = stream;
-    };
-    const closeHandler = () => {
+      console.debug("stream received, firing STREAM event", stream.getTracks().map(track => track.kind).toString());
+      // PeerJS fires "stream" once per track (audio, video). Only the first
+      // one should drive the connecting → active transition.
+      if (this.stateMachine.canTransition("STREAM")) {
+        this.stateMachine.transition("STREAM");
+      }
+    });
+    this.bindings.bind(conn, "close", () => {
       this.stateMachine.transition("CLOSE");
-      this.cleanup();
-    };
-    const errorHandler = (err: any) => {
+      this.bindings.cleanup();
+    });
+    this.bindings.bind(conn, "error", (err: any) => {
       console.error("MediaConnection error:", err);
       this.stateMachine.transition("ERROR");
-    };
-
-    conn.on("stream", streamHandler);
-    conn.on("close", closeHandler);
-    conn.on("error", errorHandler);
-
-    this.eventListeners.push(
-      () => conn.off("stream", streamHandler),
-      () => conn.off("close", closeHandler),
-      () => conn.off("error", errorHandler),
-    );
+    });
   }
 
   /** Answer an incoming call (only valid in 'incoming' state). */
-  answer(stream?: MediaStream): void {
+  answer(): void {
     if (this.stateMachine.currentState !== "incoming") {
       throw new Error(
         `Cannot answer while in state "${this.stateMachine.currentState}"`,
       );
     }
     this.stateMachine.transition("ANSWER");
-    this.conn.answer(stream);
+    this.conn.answer(this.media.localMedia.getStream());
   }
 
   /** Reject an incoming call (only valid in 'incoming' state). */
@@ -124,11 +124,5 @@ export class MediaConnectionStateMachine {
     }
     this.stateMachine.transition("LOCAL_CLOSE");
     this.conn.close();
-  }
-
-  /** Clean up event listeners (internal). */
-  private cleanup(): void {
-    this.eventListeners.forEach((unsub) => unsub());
-    this.eventListeners.length = 0;
   }
 }

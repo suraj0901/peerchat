@@ -1,5 +1,6 @@
 import type { DataConnection } from "peerjs";
 import { StateMachine } from "./base-state-machine";
+import { EventBindings } from "./event-bindings";
 
 
 export type DataConnectionState =
@@ -28,32 +29,22 @@ const dataConnectionTransitions: Record<DataConnectionState, Partial<Record<Data
  */
 export class DataConnectionStateMachine {
     public readonly stateMachine: StateMachine<DataConnectionState, DataConnectionEvent>;
-    private readonly conn: DataConnection; // Replace with actual DataConnection type
-    private readonly eventListeners: Array<() => void> = [];
+    private readonly conn: DataConnection;
+    private readonly bindings = new EventBindings();
 
     constructor(conn: DataConnection) {
         this.conn = conn;
         this.stateMachine = new StateMachine<DataConnectionState, DataConnectionEvent>('connecting', dataConnectionTransitions);
 
-        const openHandler = () => this.stateMachine.transition('OPEN');
-        const closeHandler = () => {
+        this.bindings.bind(conn, 'open', () => this.stateMachine.transition('OPEN'));
+        this.bindings.bind(conn, 'close', () => {
             this.stateMachine.transition('CLOSE');
-            this.cleanup();
-        }
-        const errorHandler = (err: any) => {
+            this.bindings.cleanup();
+        });
+        this.bindings.bind(conn, 'error', (err: any) => {
             console.error('DataConnection error:', err);
             this.stateMachine.transition('ERROR');
-        };
-
-        conn.on('open', openHandler);
-        conn.on('close', closeHandler);
-        conn.on('error', errorHandler);
-
-        this.eventListeners.push(
-            () => conn.off('open', openHandler),
-            () => conn.off('close', closeHandler),
-            () => conn.off('error', errorHandler)
-        );
+        });
 
         // If the connection is already open when we start listening, transition immediately
         if (conn.open) {
@@ -78,11 +69,5 @@ export class DataConnectionStateMachine {
         }
         this.stateMachine.transition('LOCAL_CLOSE');
         this.conn.close();
-    }
-
-    /** Clean up event listeners (internal). */
-    private cleanup(): void {
-        this.eventListeners.forEach(unsub => unsub());
-        this.eventListeners.length = 0;
     }
 }

@@ -1,7 +1,8 @@
 import type { MediaConnection } from "peerjs";
 import { TypedEmitter } from "./typed-emitter";
-import { MediaConnectionStateMachine } from "./state-machine";
+import { MediaConnectionStateMachine, type MediaConnectionState } from "./state-machine";
 import { MediaAcquirer, type CallMediaManager } from "./media";
+import type { MappedState } from "./state-machine/base-state-machine";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -16,6 +17,19 @@ export type CallEvents = {
 };
 
 // ---------------------------------------------------------------------------
+// Status mapping
+// ---------------------------------------------------------------------------
+
+const STATUS_MAP: Record<MediaConnectionState, CallStatus> = {
+    connecting: "connecting",
+    incoming: "ringing",
+    active: "active",
+    closing: "ended",
+    closed: "ended",
+    error: "ended",
+};
+
+// ---------------------------------------------------------------------------
 // Call
 // ---------------------------------------------------------------------------
 
@@ -27,7 +41,7 @@ export type CallEvents = {
  */
 export class Call extends TypedEmitter<CallEvents> {
     private readonly _sm: MediaConnectionStateMachine;
-    private _status: CallStatus;
+    private readonly _mappedStatus: MappedState<CallStatus>;
 
     /** @internal — Use `PeerChat.call()` or the `incomingCall` event instead. */
     constructor(
@@ -38,28 +52,20 @@ export class Call extends TypedEmitter<CallEvents> {
 
         const initialSmStatus = direction === "incoming" ? "incoming" : "connecting";
         this._sm = new MediaConnectionStateMachine(conn, initialSmStatus);
-        this._status = direction === "incoming" ? "ringing" : "connecting";
 
-        // --- wire internal state machine → public status ---
+        // Derived status — single source of truth from the state machine
+        this._mappedStatus = this._sm.stateMachine.mapState(s => STATUS_MAP[s]);
+        this._mappedStatus.onChange((newStatus) => {
+            this.emit("status", newStatus);
+        });
+
+        // Side-effects that aren't status: remoteStream + error events
         this._sm.stateMachine.onStateChange((newState) => {
-            switch (newState) {
-                case "connecting":
-                    this._setStatus("connecting");
-                    break;
-                case "active":
-                    this._setStatus("active");
-                    if (this._sm.remoteStream) {
-                        this.emit("remoteStream", this._sm.remoteStream);
-                    }
-                    break;
-                case "closed":
-                case "closing":
-                    this._setStatus("ended");
-                    break;
-                case "error":
-                    this.emit("error", new Error("Media connection error"));
-                    this._setStatus("ended");
-                    break;
+            if (newState === "active" && this._sm.remoteStream) {
+                this.emit("remoteStream", this._sm.remoteStream);
+            }
+            if (newState === "error") {
+                this.emit("error", new Error("Media connection error"));
             }
         });
     }
@@ -71,7 +77,7 @@ export class Call extends TypedEmitter<CallEvents> {
     }
 
     get status(): CallStatus {
-        return this._status;
+        return this._mappedStatus.get();
     }
 
     get remoteStream(): MediaStream | undefined {
@@ -80,7 +86,29 @@ export class Call extends TypedEmitter<CallEvents> {
 
     /** The local media stream being sent to the remote peer. */
     get localStream(): MediaStream {
-        return this._media.getStream();
+        return this.media.getStream();
+    }
+
+    /** Whether the microphone is muted. */
+    get isMuted(): boolean {
+        return this.media.isMuted();
+    }
+
+    /** Whether the camera is currently on. */
+    get isCameraOn(): boolean {
+        return this.media.localMedia.isCameraOn();
+    }
+
+    // -- Media controls --------------------------------------------------------
+
+    /**
+     * Access to the underlying `CallMediaManager` for media controls:
+     * `toggleMute()`, `mute()`, `unmute()`, `toggleCamera()`, `cameraOn()`,
+     * `cameraOff()`, `switchCamera()`, `switchMicrophone()`, `switchSpeaker()`,
+     * `startScreenShare()`, `stopScreenShare()`.
+     */
+    get media(): CallMediaManager {
+        return this._sm.media;
     }
 
     // -- Actions ---------------------------------------------------------------
@@ -91,10 +119,8 @@ export class Call extends TypedEmitter<CallEvents> {
      * Acquires local media (camera + microphone by default) and answers the
      * call. Returns a `ResultAsync` that resolves on success.
      */
-    answer(constraints: MediaStreamConstraints = { audio: true, video: true }) {
-        return MediaAcquirer.getUserMedia(constraints).map((stream) => {
-            this._sm.answer(stream);
-        });
+    answer() {
+        this._sm.answer();
     }
 
     /**
@@ -108,74 +134,7 @@ export class Call extends TypedEmitter<CallEvents> {
      * Hang up the call. Idempotent — safe to call multiple times.
      */
     hangup(): void {
-        if (this._status === "ended") return;
+        if (this.status === "ended") return;
         this._sm.close();
-    }
-
-    // -- Media controls (delegated to CallMediaManager) ------------------------
-
-    get isMuted(): boolean {
-        return this._media.isMuted();
-    }
-
-    get isCameraOn(): boolean {
-        return !this._media.isMuted(); // camera check via localMedia
-    }
-
-    toggleMute(): void {
-        this._media.toggleMute();
-    }
-
-    toggleCamera(): void {
-        this._media.toggleCamera();
-    }
-
-    mute(): void {
-        this._media.mute();
-    }
-
-    unmute(): void {
-        this._media.unmute();
-    }
-
-    cameraOn(): void {
-        this._media.cameraOn();
-    }
-
-    cameraOff(): void {
-        this._media.cameraOff();
-    }
-
-    switchCamera(deviceId: string) {
-        return this._media.switchCamera(deviceId);
-    }
-
-    switchMicrophone(deviceId: string) {
-        return this._media.switchMicrophone(deviceId);
-    }
-
-    switchSpeaker(deviceId: string, audioElement: HTMLAudioElement) {
-        return this._media.switchSpeaker(deviceId, audioElement);
-    }
-
-    startScreenShare(constraints?: DisplayMediaStreamOptions) {
-        return this._media.startScreenShare(constraints);
-    }
-
-    stopScreenShare() {
-        return this._media.stopScreenShare();
-    }
-
-    // -- Internals -------------------------------------------------------------
-
-    /** Access to the underlying CallMediaManager (created by MediaConnectionStateMachine). */
-    private get _media(): CallMediaManager {
-        return this._sm.media;
-    }
-
-    private _setStatus(status: CallStatus): void {
-        if (this._status === status) return;
-        this._status = status;
-        this.emit("status", status);
     }
 }

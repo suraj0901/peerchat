@@ -1,6 +1,6 @@
 import { errAsync, ResultAsync } from "neverthrow";
-import { MediaAcquirer } from "./media-acquirer";
-import { GetDisplayMediaError, GetUserMediaError } from "../errors";
+import { MediaAcquirer } from "../media-acquirer";
+import { GetDisplayMediaError, GetUserMediaError } from "../../errors";
 import type { LocalMedia } from "./local-media";
 
 export class ScreenShareController {

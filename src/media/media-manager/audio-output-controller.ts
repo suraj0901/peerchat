@@ -1,5 +1,5 @@
 import { ResultAsync, errAsync } from "neverthrow";
-import { MediaDeviceError, NotSupportSinkIdError } from "../errors";
+import { MediaDeviceError, NotSupportSinkIdError } from "../../errors";
 
 export class AudioOutputController {
 

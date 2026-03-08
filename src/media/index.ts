@@ -1,2 +1,2 @@
 export * from "./media-acquirer";
-export * from "./call-media-manager";
+export * from "./media-manager";

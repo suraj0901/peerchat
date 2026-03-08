@@ -61,4 +61,37 @@ export class StateMachine<State extends string, Event extends string> {
         const eventMap = this.transitions.get(this._state);
         return eventMap?.has(event) ?? false;
     }
+
+    /**
+     * Create a derived state view that maps the internal state to a simpler
+     * public value. The `onChange` callback only fires when the mapped value
+     * actually changes, deduplicating transitions that map to the same output.
+     */
+    mapState<T>(mapFn: (state: State) => T): MappedState<T> {
+        let current = mapFn(this._state);
+
+        const listeners = new Set<(value: T, prev: T) => void>();
+
+        this.onStateChange((newState) => {
+            const next = mapFn(newState);
+            if (next !== current) {
+                const prev = current;
+                current = next;
+                listeners.forEach(fn => fn(current, prev));
+            }
+        });
+
+        return {
+            get: () => current,
+            onChange(listener: (value: T, prev: T) => void): () => void {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+            },
+        };
+    }
+}
+
+export interface MappedState<T> {
+    get(): T;
+    onChange(listener: (value: T, prev: T) => void): () => void;
 }
