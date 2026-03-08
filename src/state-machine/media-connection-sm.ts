@@ -1,7 +1,7 @@
 import { MediaConnection } from "peerjs";
 import { StateMachine } from "./base-state-machine";
-import { CallMediaManager } from "../media";
 import { EventBindings } from "./event-bindings";
+import { MediaManager } from "../media";
 
 export type MediaConnectionState =
   | "connecting" // outgoing call or after answering
@@ -45,7 +45,7 @@ export class MediaConnectionStateMachine {
     MediaConnectionEvent
   >;
   public remoteStream?: MediaStream;
-  public readonly media: CallMediaManager;
+  public readonly media: MediaManager;
 
   private readonly conn: MediaConnection;
   private readonly bindings = new EventBindings();
@@ -63,7 +63,7 @@ export class MediaConnectionStateMachine {
     initialStatus: "incoming" | "connecting" = "connecting",
   ) {
     this.conn = conn;
-    this.media = new CallMediaManager(conn.localStream, conn.peerConnection);
+    this.media = new MediaManager(conn.localStream, conn.peerConnection);
 
     this.stateMachine = new StateMachine<
       MediaConnectionState,

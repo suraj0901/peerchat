@@ -1,7 +1,6 @@
 import type { MediaConnection } from "peerjs";
 import { TypedEmitter } from "./typed-emitter";
 import { MediaConnectionStateMachine, type MediaConnectionState } from "./state-machine";
-import { MediaAcquirer, type CallMediaManager } from "./media";
 import type { MappedState } from "./state-machine/base-state-machine";
 
 // ---------------------------------------------------------------------------
@@ -107,7 +106,7 @@ export class Call extends TypedEmitter<CallEvents> {
      * `cameraOff()`, `switchCamera()`, `switchMicrophone()`, `switchSpeaker()`,
      * `startScreenShare()`, `stopScreenShare()`.
      */
-    get media(): CallMediaManager {
+    get media() {
         return this._sm.media;
     }
 
