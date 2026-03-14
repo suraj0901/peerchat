@@ -2,13 +2,20 @@ import { errAsync, ResultAsync } from "neverthrow";
 import { MediaAcquirer } from "../media-acquirer";
 import { GetDisplayMediaError, GetUserMediaError } from "../../errors";
 import type { LocalMedia } from "./local-media";
+import { TypedEmitter } from "../../typed-emitter";
 
-export class ScreenShareController {
+export class ScreenShareController extends TypedEmitter<{ onStop: () => void }> {
   private originalVideoTrack: MediaStreamTrack | null = null;
   constructor(
     private localMedia: LocalMedia,
     private getVideoSender: () => RTCRtpSender | undefined,
-  ) {}
+  ) {
+    super()
+  }
+
+  isScreenSharing(): boolean {
+    return this.originalVideoTrack !== null;
+  }
 
   startScreenShare(
     displayConstraints: DisplayMediaStreamOptions = { video: true },
@@ -64,6 +71,17 @@ export class ScreenShareController {
       // Update local stream back to camera
       this.localMedia.replaceVideoTrack(this.originalVideoTrack!);
       this.originalVideoTrack = null; // clear stored track
+      this.emit("onStop")
     });
+  }
+
+  toggleScreenShare(
+    displayConstraints?: DisplayMediaStreamOptions
+  ) {
+    if (this.isScreenSharing()) {
+      return this.stopScreenShare();
+    } else {
+      return this.startScreenShare(displayConstraints);
+    }
   }
 }

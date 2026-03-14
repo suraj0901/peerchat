@@ -11,17 +11,18 @@ export class MediaManager {
 
   constructor(
     localStream: MediaStream,
-    pc: RTCPeerConnection,
+    getVideoSender: () => RTCRtpSender | undefined,
+    getAudioSender: () => RTCRtpSender | undefined,
   ) {
     this.localMedia = new LocalMedia(localStream);
     this.deviceInput = new DeviceInputController(
       this.localMedia,
-      () => pc.getSenders().find((s) => s.track?.kind === "video"),
-      () => pc.getSenders().find((s) => s.track?.kind === "audio"),
+      getVideoSender,
+      getAudioSender,
     );
     this.screenShareController = new ScreenShareController(
       this.localMedia,
-      () => pc.getSenders().find((s) => s.track?.kind === "video"),
+      getVideoSender,
     );
     this.audioOutput = new AudioOutputController();
   }
@@ -33,6 +34,14 @@ export class MediaManager {
 
   isMuted() {
     return this.localMedia.isMuted();
+  }
+
+  isCameraOn() {
+    return this.localMedia.isCameraOn();
+  }
+
+  isScreenSharing() {
+    return this.screenShareController.isScreenSharing();
   }
 
   mute() {
@@ -82,5 +91,9 @@ export class MediaManager {
 
   stopScreenShare() {
     return this.screenShareController.stopScreenShare();
+  }
+
+  toggleScreenShare(displayConstraints?: DisplayMediaStreamOptions) {
+    return this.screenShareController.toggleScreenShare(displayConstraints);
   }
 }

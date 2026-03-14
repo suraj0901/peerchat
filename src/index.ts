@@ -1,12 +1,11 @@
 // Public API
-export { PeerChat } from "./peer-chat";
-export type { PeerChatStatus, PeerChatEvents } from "./peer-chat";
+export { PeerClient } from "./PeerClient";
+export type { ClientSnapshot, Listener } from "./PeerClient";
 
-export { Call } from "./call";
-export type { CallStatus, CallEvents } from "./call";
-
-export { Channel } from "./channel";
-export type { ChannelStatus, ChannelEvents } from "./channel";
+// Export machine typings for full typescript support downstream
+export type { PeerState, PeerEvent, PeerContext } from "./machines/peerMachine";
+export type { ConnState, ConnEvent, ConnContext, ChatMessage } from "./machines/connectionMachine";
+export type { MediaState, MediaEvent, MediaContext } from "./machines/mediaMachine";
 
 // Device utilities
 export {
