@@ -1,11 +1,14 @@
-import type { Peer, DataConnection, MediaConnection, PeerError } from "peerjs";
+import type { Peer } from "peerjs";
 import { createActor, type Actor } from "xstate";
 import {
   peerMachine,
+  mediaDeviceMachine,
   type PeerEmittedEvent,
   type PeerCommand,
+  type MediaDeviceEmittedEvent,
+  type MediaDeviceCommand,
+  type MediaMode,
 } from "./machines";
-import { MediaManager } from "./media";
 import {
   getCameras,
   getMicrophones,
@@ -14,130 +17,311 @@ import {
   type Microphone,
   type Speaker,
 } from "./device";
-import { GetUserMediaError } from "./errors";
-import { ResultAsync } from "neverthrow";
+
+// ── Unified event map ─────────────────────────────────────────────────────────
+
+type AllEmittedEvents = PeerEmittedEvent | MediaDeviceEmittedEvent;
 
 type PeerClientEvents = {
-  [K in PeerEmittedEvent["type"]]: (
-    payload: Extract<PeerEmittedEvent, { type: K }>,
+  [K in AllEmittedEvents["type"]]: (
+    payload: Extract<AllEmittedEvents, { type: K }>,
   ) => void;
 };
 
+// ── PeerClient ────────────────────────────────────────────────────────────────
+
+/**
+ * High-level, event-driven wrapper around PeerJS for video calls, data
+ * channels, and local media management.
+ *
+ * Internally coordinates two independent XState machines:
+ *
+ *   - **peerMachine** — signaling, data connections, and media calls.
+ *   - **mediaDeviceMachine** — local stream acquisition, track health,
+ *     device switching, and recovery.
+ *
+ * End users interact through simple imperative methods and a single
+ * `on()` subscription that covers both peer and media events.
+ *
+ * @example
+ * ```typescript
+ * const client = new PeerClient(peer);
+ *
+ * // Subscribe to events (peer + media, unified)
+ * client.on('peer.ready', ({ peerId }) => console.log('Ready:', peerId));
+ * client.on('media.stream.ready', ({ stream }) => { video.srcObject = stream; });
+ * client.on('media.permission.denied', () => showPermissionsHelp());
+ *
+ * // Acquire local media
+ * client.requestMedia({ audio: true, video: true });
+ *
+ * // Make a call (uses the active media stream automatically)
+ * client.call('remote-peer-id');
+ *
+ * // Switch camera mid-call
+ * client.switchDevice('video', newCameraDeviceId);
+ * ```
+ */
 export class PeerClient {
   private peer: Peer;
-  private actor: Actor<typeof peerMachine>;
-  public mediaManager: MediaManager | undefined;
-  public localStream: MediaStream | undefined;
+  private peerActor: Actor<typeof peerMachine>;
+  private mediaActor: Actor<typeof mediaDeviceMachine>;
 
   constructor(peer: Peer) {
     this.peer = peer;
-    this.actor = createActor(peerMachine, {
-      input: {
-        peer: this.peer,
-      },
+
+    this.peerActor = createActor(peerMachine, {
+      input: { peer: this.peer },
     });
-    this.actor.start();
+
+    this.mediaActor = createActor(mediaDeviceMachine, {
+      input: {},
+    });
+
+    this.peerActor.start();
+    this.mediaActor.start();
   }
 
+  // ── Event subscription ──────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to any event emitted by either the peer machine or the media
+   * device machine. Events are routed automatically — `media.*` events go to
+   * the media actor, everything else goes to the peer actor.
+   *
+   * Returns an unsubscribe function.
+   *
+   * @example
+   * ```typescript
+   * const unsub = client.on('call.active', ({ remoteStream }) => { ... });
+   * // later:
+   * unsub();
+   * ```
+   */
   public on<T extends keyof PeerClientEvents>(
     eventType: T,
     listener: PeerClientEvents[T],
   ) {
-    this.actor.on(eventType, listener);
+    if ((eventType as string).startsWith("media.")) {
+      return this.mediaActor.on(
+        eventType as MediaDeviceEmittedEvent["type"],
+        listener as any,
+      );
+    }
+    return this.peerActor.on(
+      eventType as PeerEmittedEvent["type"],
+      listener as any,
+    );
   }
+
+  // ── Peer state ──────────────────────────────────────────────────────────────
+
+  /** The local peer ID assigned by the signaling server. */
+  public get peerId(): string | null {
+    return this.peerActor.getSnapshot().context.peerId;
+  }
+
+  /** Current peer machine state (e.g. `{ alive: 'ready' }`). */
+  public get state() {
+    return this.peerActor.getSnapshot().value;
+  }
+
+  // ── Media state ─────────────────────────────────────────────────────────────
+
+  /**
+   * Current media machine state.
+   * One of: `'idle'`, `'requesting'`, `'active'`, `'switching'`, `'recovering'`, `'denied'`.
+   */
+  public get mediaState() {
+    return this.mediaActor.getSnapshot().value;
+  }
+
+  /** The active local MediaStream, or `null` if no stream is acquired. */
+  public get localStream(): MediaStream | null {
+    return this.mediaActor.getSnapshot().context.stream;
+  }
+
+  /** Available media devices. Populated after stream acquisition and updated on device changes. */
+  public get devices(): MediaDeviceInfo[] {
+    return this.mediaActor.getSnapshot().context.devices;
+  }
+
+  /** Current media mode: `'user'` (camera/mic) or `'screen'` (display capture). */
+  public get mediaMode(): MediaMode {
+    return this.mediaActor.getSnapshot().context.mode;
+  }
+
+  /** The last media-related error, or `null`. */
+  public get mediaError(): Error | null {
+    return this.mediaActor.getSnapshot().context.lastError;
+  }
+
+  // ── Media commands ──────────────────────────────────────────────────────────
+
+  /**
+   * Acquire a camera/microphone stream. Emits `media.stream.ready` on success,
+   * `media.permission.denied` or `media.stream.error` on failure.
+   *
+   * @param constraints - getUserMedia constraints. Defaults to `{ audio: true, video: true }`.
+   */
+  public requestMedia(
+    constraints: MediaStreamConstraints = { audio: true, video: true },
+  ) {
+    this.mediaActor.send({ type: "REQUEST", constraints });
+  }
+
+  /**
+   * Acquire a screen/window/tab capture stream. Emits `media.stream.ready` on
+   * success. When the user stops sharing via the browser toolbar, the machine
+   * returns to idle and emits `media.stream.stopped`.
+   *
+   * @param constraints - getDisplayMedia constraints.
+   */
+  public requestScreen(constraints?: DisplayMediaStreamOptions) {
+    this.mediaActor.send({ type: "REQUEST_SCREEN", constraints });
+  }
+
+  /**
+   * Replace a track in the active stream with one from a different device.
+   * Only valid when the media machine is in `'active'` state and mode is `'user'`.
+   *
+   * Emits `media.device.switched` on success or `media.device.switch.failed` on error.
+   * The stream reference does not change — tracks are swapped in place.
+   *
+   * @param kind - `'audio'` or `'video'`
+   * @param deviceId - The target device ID
+   */
+  public switchDevice(kind: "audio" | "video", deviceId: string) {
+    this.mediaActor.send({ type: "SWITCH_DEVICE", kind, deviceId });
+  }
+
+  /**
+   * Stop all tracks on the current stream and return the media machine to idle.
+   * Safe to call in any state. Emits `media.stream.stopped`.
+   */
+  public stopMedia() {
+    this.mediaActor.send({ type: "STOP" });
+  }
+
+  // ── Peer commands (private send helper) ─────────────────────────────────────
 
   private send(event: PeerCommand) {
-    this.actor.send(event);
+    this.peerActor.send(event);
   }
 
-  private setMediaManager(localStream: MediaStream) {
-    const mediaConnection = this.actor.getSnapshot().context.calls;
-    this.mediaManager = new MediaManager(
-      localStream,
-      () => this.getVideoSender(mediaConnection.peerConnection),
-      () => this.getAudioSender(mediaConnection.peerConnection),
-    );
-  }
+  // ── Data connections ────────────────────────────────────────────────────────
 
-  public get peerId() {
-    return this.peer.id;
-  }
-
-  public get state() {
-    return this.actor.getSnapshot().value;
-  }
-
-  // TODO: Add media manager
-  // constructor(peer: Peer, localStream: MediaStream) {
-  //   ...
-  //   this.mediaManager = new MediaManager(localStream, () => this.getVideoSender(), () => this.getAudioSender());
-  // }
-
-  private getVideoSender(peerConnection: RTCPeerConnection): RTCRtpSender | undefined {
-    return peerConnection.getSenders()?.find(
-      (s: RTCRtpSender) => s.track?.kind === "video"
-    );
-  }
-
-  private getAudioSender(peerConnection: RTCPeerConnection): RTCRtpSender | undefined {
-    return peerConnection.getSenders()?.find(
-      (s: RTCRtpSender) => s.track?.kind === "audio"
-    );
-  }
-
+  /** Initiate a data connection to a remote peer. */
   public connect(remotePeerId: string) {
     this.send({ type: "CONNECT_TO", remotePeerId });
   }
 
+  /** Send data over an existing data connection. */
   public sendData(connectionId: string, data: unknown) {
     this.send({ type: "SEND", connectionId, data });
   }
 
+  /** Close a data connection. */
   public closeConnection(connectionId: string) {
     this.send({ type: "CLOSE_CONNECTION", connectionId });
   }
 
+  // ── Media calls ─────────────────────────────────────────────────────────────
+
+  /**
+   * Initiate an outbound call. If the media machine already has an active
+   * stream, it is used immediately. Otherwise, media is auto-requested with
+   * the given constraints, and the call is placed once the stream is ready.
+   *
+   * Listen for `call.active` to know when the remote stream arrives.
+   *
+   * @param remotePeerId - The peer to call
+   * @param constraints - getUserMedia constraints (used only if no stream is active).
+   *                      Defaults to `{ audio: true, video: true }`.
+   */
   public call(
     remotePeerId: string,
     constraints: MediaStreamConstraints = { audio: true, video: true },
   ) {
-    return PeerClient.getLocalStream(constraints).map((localStream) => {
-      this.localStream = localStream;
-      this.send({ type: "CALL", remotePeerId, localStream });
-    });
+    const snapshot = this.mediaActor.getSnapshot();
+
+    if (snapshot.matches("active") && snapshot.context.stream) {
+      this.send({
+        type: "CALL",
+        remotePeerId,
+        localStream: snapshot.context.stream,
+      });
+    } else {
+      // Auto-acquire media, then place the call
+      this.requestMedia(constraints);
+      const sub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
+        sub.unsubscribe();
+        this.send({ type: "CALL", remotePeerId, localStream: stream });
+      });
+    }
   }
 
-  public answerCall(callId: string, constraints: MediaStreamConstraints = { audio: true, video: true }) {
-    return PeerClient.getLocalStream(constraints).map((localStream) => {
-      this.localStream = localStream;
-      this.send({ type: "ANSWER_CALL", callId, localStream });
-    });
+  /**
+   * Answer an incoming call. If the media machine already has an active
+   * stream, it is used immediately. Otherwise, media is auto-requested with
+   * the given constraints, and the call is answered once the stream is ready.
+   *
+   * @param callId - The call to answer (from `call.incoming` event)
+   * @param constraints - getUserMedia constraints (used only if no stream is active).
+   *                      Defaults to `{ audio: true, video: true }`.
+   */
+  public answerCall(
+    callId: string,
+    constraints: MediaStreamConstraints = { audio: true, video: true },
+  ) {
+    const snapshot = this.mediaActor.getSnapshot();
+
+    if (snapshot.matches("active") && snapshot.context.stream) {
+      this.send({
+        type: "ANSWER_CALL",
+        callId,
+        localStream: snapshot.context.stream,
+      });
+    } else {
+      // Auto-acquire media, then answer
+      this.requestMedia(constraints);
+      const sub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
+        sub.unsubscribe();
+        this.send({ type: "ANSWER_CALL", callId, localStream: stream });
+      });
+    }
   }
 
+  /** Reject an incoming call without answering. */
   public rejectCall(callId: string) {
     this.send({ type: "REJECT_CALL", callId });
   }
 
+  /** Hang up an active or connecting call. */
   public hangUp(callId: string) {
     this.send({ type: "HANG_UP", callId });
   }
 
+  // ── Peer lifecycle ──────────────────────────────────────────────────────────
+
+  /** Reconnect to the signaling server after a disconnection. */
   public reconnect() {
     this.send({ type: "RECONNECT" });
   }
 
+  /**
+   * Destroy the peer instance and stop all media. After this call,
+   * the PeerClient instance is no longer usable.
+   */
   public destroy() {
     this.send({ type: "DESTROY" });
+    this.mediaActor.send({ type: "STOP" });
+    this.mediaActor.stop();
   }
+
+  // ── Static device utilities ─────────────────────────────────────────────────
 
   public static getMicrophones = getMicrophones;
   public static getCameras = getCameras;
   public static getSpeakers = getSpeakers;
-
-  public static getLocalStream(constraints: MediaStreamConstraints) {
-    return ResultAsync.fromPromise(
-      navigator.mediaDevices.getUserMedia(constraints),
-      (error) => new GetUserMediaError(error),
-    );
-  }
 }
