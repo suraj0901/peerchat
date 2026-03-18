@@ -1,21 +1,10 @@
 // Public API
-export { PeerClient } from "./PeerClient";
-export type { ClientSnapshot, Listener, MediaDeviceSnapshot } from "./PeerClient";
+
+export { PeerClient } from './PeerClient';
+export * from './errors';
 
 // Export machine factory for full typescript support downstream
-export { createPeerMachine } from "./machines/peerMachine";
-export { PeerActor } from "./machines/PeerActor";
-export type {
-  PeerContext,
-  PeerEvent,
-  PeerRootState,
-  ConnState,
-  MediaState,
-  AudioState,
-  VideoState,
-  ScreenShareState,
-  ChatMessage,
-} from "./machines/peerMachine.types";
+export * from "./machines"
 
 // Device utilities
 export {

@@ -1,166 +1,143 @@
-import { createActor } from "xstate";
+import type { Peer, DataConnection, MediaConnection, PeerError } from "peerjs";
+import { createActor, type Actor } from "xstate";
 import {
-  createPeerMachine,
-} from "./machines/peerMachine";
-import type {
-  PeerContext,
-  PeerRootState,
-  ConnState,
-  MediaState,
-  AudioState,
-  VideoState,
-  ScreenShareState,
-} from "./machines/peerMachine.types";
-import { PeerActor } from "./machines/PeerActor";
+  peerMachine,
+  type PeerEmittedEvent,
+  type PeerCommand,
+} from "./machines";
+import { MediaManager } from "./media";
+import {
+  getCameras,
+  getMicrophones,
+  getSpeakers,
+  type Camera,
+  type Microphone,
+  type Speaker,
+} from "./device";
+import { GetUserMediaError } from "./errors";
+import { ResultAsync } from "neverthrow";
 
-export type MediaDeviceSnapshot = {
-  audio: AudioState;
-  video: VideoState;
-  screenShare: ScreenShareState;
-  screenShareContext: { error?: string };
+type PeerClientEvents = {
+  [K in PeerEmittedEvent["type"]]: (
+    payload: Extract<PeerEmittedEvent, { type: K }>,
+  ) => void;
 };
-
-export type ClientSnapshot = {
-  peer: { state: PeerRootState; context: PeerContext };
-  conn: { state: ConnState };
-  media: { state: MediaState };
-  localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
-  screenStream: MediaStream | null;
-  mediaDevice: MediaDeviceSnapshot;
-  isAudioMuted: boolean;
-  isVideoEnabled: boolean;
-  isScreenSharing: boolean;
-};
-
-export type Listener = (snapshot: ClientSnapshot) => void;
 
 export class PeerClient {
-  private actor: ReturnType<typeof createActor<ReturnType<typeof createPeerMachine>>>;
-  private peerActor: PeerActor;
+  private peer: Peer;
+  private actor: Actor<typeof peerMachine>;
+  public mediaManager: MediaManager | undefined;
+  public localStream: MediaStream | undefined;
 
-  private listeners: Set<Listener> = new Set();
-  private currentSnapshot: ClientSnapshot;
-
-  constructor(id?: string, options?: any) {
-    this.peerActor = new PeerActor((event) => {
-      this.actor.send(event);
+  constructor(peer: Peer) {
+    this.peer = peer;
+    this.actor = createActor(peerMachine, {
+      input: {
+        peer: this.peer,
+      },
     });
-
-    const machine = createPeerMachine(this.peerActor);
-    this.actor = createActor(machine);
-
-    this.currentSnapshot = this.computeSnapshot();
-
     this.actor.start();
-    this.actor.subscribe(() => this.notify());
-
-    this.actor.send({ type: "CONNECT" });
   }
 
-  public getSnapshot = (): ClientSnapshot => this.currentSnapshot;
+  public on<T extends keyof PeerClientEvents>(
+    eventType: T,
+    listener: PeerClientEvents[T],
+  ) {
+    this.actor.on(eventType, listener);
+  }
 
-  public subscribe = (listener: Listener): (() => void) => {
-    this.listeners.add(listener);
-    listener(this.currentSnapshot);
-    return () => this.listeners.delete(listener);
-  };
+  private send(event: PeerCommand) {
+    this.actor.send(event);
+  }
 
-  public connect = () => this.actor.send({ type: "CONNECT" });
-  public retryPeer = () => {
-    if (this.actor.getSnapshot().matches("error")) {
-      this.actor.send({ type: "CONNECT" });
-    }
-  };
-  public destroyPeer = () => this.actor.send({ type: "DESTROY" });
+  private setMediaManager(localStream: MediaStream) {
+    const mediaConnection = this.actor.getSnapshot().context.calls;
+    this.mediaManager = new MediaManager(
+      localStream,
+      () => this.getVideoSender(mediaConnection.peerConnection),
+      () => this.getAudioSender(mediaConnection.peerConnection),
+    );
+  }
 
-  public connectPeer = (remotePeerId: string) =>
-    this.actor.send({ type: "CONNECT_PEER", remotePeerId });
-  public sendMessage = (text: string) =>
-    this.actor.send({ type: "SEND_MESSAGE", text });
-  public disconnect = () => this.actor.send({ type: "DISCONNECT" });
+  public get peerId() {
+    return this.peer.id;
+  }
 
-  public startCall = (remotePeerId: string) =>
-    this.actor.send({ type: "START_CALL", remotePeerId });
-  public acceptCall = () => this.actor.send({ type: "ACCEPT_CALL" });
-  public declineCall = () => this.actor.send({ type: "DECLINE_CALL" });
-  public hangUp = () => this.actor.send({ type: "HANG_UP" });
+  public get state() {
+    return this.actor.getSnapshot().value;
+  }
 
-  public toggleAudio = () => this.actor.send({ type: "TOGGLE_AUDIO" });
-  public toggleVideo = () => this.actor.send({ type: "TOGGLE_VIDEO" });
-  public toggleScreenShare = () => this.actor.send({ type: "TOGGLE_SCREEN_SHARE" });
+  // TODO: Add media manager
+  // constructor(peer: Peer, localStream: MediaStream) {
+  //   ...
+  //   this.mediaManager = new MediaManager(localStream, () => this.getVideoSender(), () => this.getAudioSender());
+  // }
 
-  public cleanup = () => {
-    this.peerActor.cleanup();
-    this.actor.stop();
-  };
+  private getVideoSender(peerConnection: RTCPeerConnection): RTCRtpSender | undefined {
+    return peerConnection.getSenders()?.find(
+      (s: RTCRtpSender) => s.track?.kind === "video"
+    );
+  }
 
-  private notify = () => {
-    this.currentSnapshot = this.computeSnapshot();
-    this.listeners.forEach((l) => l(this.currentSnapshot));
-  };
+  private getAudioSender(peerConnection: RTCPeerConnection): RTCRtpSender | undefined {
+    return peerConnection.getSenders()?.find(
+      (s: RTCRtpSender) => s.track?.kind === "audio"
+    );
+  }
 
-  private computeSnapshot = (): ClientSnapshot => {
-    const snap = this.actor.getSnapshot();
-    const ctx = snap.context;
+  public connect(remotePeerId: string) {
+    this.send({ type: "CONNECT_TO", remotePeerId });
+  }
 
-    const peerState: PeerRootState = snap.matches("ready")
-      ? "ready"
-      : snap.matches("error")
-      ? "error"
-      : "initializing";
+  public sendData(connectionId: string, data: unknown) {
+    this.send({ type: "SEND", connectionId, data });
+  }
 
-    const connState: ConnState = snap.matches({ ready: { connection: "connected" } })
-      ? "connected"
-      : snap.matches({ ready: { connection: "connecting" } })
-      ? "connecting"
-      : "disconnected";
+  public closeConnection(connectionId: string) {
+    this.send({ type: "CLOSE_CONNECTION", connectionId });
+  }
 
-    const mediaState: MediaState = snap.matches({ ready: { media: "in_call" } })
-      ? "in_call"
-      : snap.matches({ ready: { media: "incoming_call" } })
-      ? "incoming_call"
-      : snap.matches({ ready: { media: "placing_call" } })
-      ? "placing_call"
-      : snap.matches({ ready: { media: "acquiring_media" } })
-      ? "acquiring_media"
-      : "idle";
+  public call(
+    remotePeerId: string,
+    constraints: MediaStreamConstraints = { audio: true, video: true },
+  ) {
+    return PeerClient.getLocalStream(constraints).map((localStream) => {
+      this.localStream = localStream;
+      this.send({ type: "CALL", remotePeerId, localStream });
+    });
+  }
 
-    const audioState: AudioState = snap.matches({ ready: { media: { in_call: { audio: "muted" } } } })
-      ? "muted"
-      : "unmuted";
+  public answerCall(callId: string, constraints: MediaStreamConstraints = { audio: true, video: true }) {
+    return PeerClient.getLocalStream(constraints).map((localStream) => {
+      this.localStream = localStream;
+      this.send({ type: "ANSWER_CALL", callId, localStream });
+    });
+  }
 
-    const videoState: VideoState = snap.matches({ ready: { media: { in_call: { video: "off" } } } })
-      ? "off"
-      : "on";
+  public rejectCall(callId: string) {
+    this.send({ type: "REJECT_CALL", callId });
+  }
 
-    let screenShareState: ScreenShareState = "idle";
-    if (snap.matches({ ready: { media: { in_call: { screenShare: "active" } } } })) {
-      screenShareState = "active";
-    } else if (snap.matches({ ready: { media: { in_call: { screenShare: "requesting" } } } })) {
-      screenShareState = "requesting";
-    }
+  public hangUp(callId: string) {
+    this.send({ type: "HANG_UP", callId });
+  }
 
-    const actorSnapshot = this.peerActor.getSnapshot();
+  public reconnect() {
+    this.send({ type: "RECONNECT" });
+  }
 
-    const mediaDevice: MediaDeviceSnapshot = {
-      audio: audioState,
-      video: videoState,
-      screenShare: screenShareState,
-      screenShareContext: { error: ctx.screenShareError },
-    };
+  public destroy() {
+    this.send({ type: "DESTROY" });
+  }
 
-    return {
-      peer: { state: peerState, context: ctx },
-      conn: { state: connState },
-      media: { state: mediaState },
-      localStream: actorSnapshot.mediaManager?.getStream() || null,
-      remoteStream: actorSnapshot.remoteStream,
-      screenStream: actorSnapshot.screenStream,
-      mediaDevice,
-      isAudioMuted: audioState === "muted",
-      isVideoEnabled: videoState === "on",
-      isScreenSharing: screenShareState !== "idle",
-    };
-  };
+  public static getMicrophones = getMicrophones;
+  public static getCameras = getCameras;
+  public static getSpeakers = getSpeakers;
+
+  public static getLocalStream(constraints: MediaStreamConstraints) {
+    return ResultAsync.fromPromise(
+      navigator.mediaDevices.getUserMedia(constraints),
+      (error) => new GetUserMediaError(error),
+    );
+  }
 }
