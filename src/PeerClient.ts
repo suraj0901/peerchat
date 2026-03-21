@@ -13,9 +13,6 @@ import {
   getCameras,
   getMicrophones,
   getSpeakers,
-  type Camera,
-  type Microphone,
-  type Speaker,
 } from "./device";
 
 // ── Unified event map ─────────────────────────────────────────────────────────
