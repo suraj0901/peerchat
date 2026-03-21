@@ -107,6 +107,19 @@ export const connectionMachine = setup({
     closeConnection: ({ context }) => {
       context.connection.close();
     },
+
+    notifyParentTimeout: sendParent(
+      ({ context }): ConnectionParentEvent => ({
+        type: 'CONNECTION_ACTOR_ERROR',
+        connectionId: context.connectionId,
+        error: new Error('Connection timed out') as any,
+      })
+    ),
+  },
+
+  delays: {
+    /** Time to wait for a DataConnection to open before treating it as failed. */
+    CONNECTION_TIMEOUT: 15_000,
   },
 }).createMachine({
   id: 'connection',
@@ -125,6 +138,12 @@ export const connectionMachine = setup({
       initial: 'connecting',
       states: {
         connecting: {
+          after: {
+            CONNECTION_TIMEOUT: {
+              target: '#connection.error',
+              actions: ['closeConnection', 'notifyParentTimeout'],
+            },
+          },
           on: {
             CONNECTION_OPEN: {
               target: 'open',

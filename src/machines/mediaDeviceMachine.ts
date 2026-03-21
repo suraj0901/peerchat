@@ -74,7 +74,7 @@ const acquireStreamActor = fromPromise<AcquireStreamOutput, AcquireStreamInput>(
  * does not expose at this abstraction level.
  */
 const switchDeviceActor = fromPromise<SwitchDeviceOutput, SwitchDeviceInput>(
-  async ({ input: { stream, kind, deviceId } }) => {
+  async ({ input: { stream, kind, deviceId }, signal }) => {
     const constraints: MediaStreamConstraints =
       kind === 'audio'
         ? { audio: { deviceId: { exact: deviceId } } }
@@ -85,6 +85,13 @@ const switchDeviceActor = fromPromise<SwitchDeviceOutput, SwitchDeviceInput>(
       kind === 'audio' ? newStream.getAudioTracks()[0] : newStream.getVideoTracks()[0];
 
     if (!newTrack) throw new Error(`No ${kind} track returned for deviceId "${deviceId}"`);
+
+    // If the machine transitioned away (e.g. STOP) while getUserMedia was
+    // in-flight, stop the orphaned track before throwing.
+    if (signal.aborted) {
+      newTrack.stop();
+      throw new DOMException('Switch aborted', 'AbortError');
+    }
 
     const oldTracks = kind === 'audio' ? stream.getAudioTracks() : stream.getVideoTracks();
     oldTracks.forEach(t => {
@@ -524,13 +531,16 @@ export const mediaDeviceMachine = setup({
     },
 
     /**
-     * The browser permanently denied media permission. The Peer instance is unaffected
+     * The browser denied media permission. The Peer instance is unaffected
      * but the stream cannot be acquired without the user changing browser settings.
-     * This is a final state — send REQUEST again after the user grants permission
-     * by creating a new actor instance.
+     *
+     * Not final — the same actor can be reused by sending RETRY after the user
+     * grants permission in their browser settings.
      */
     denied: {
-      type: 'final',
+      on: {
+        RETRY: 'idle',
+      },
     },
   },
 });

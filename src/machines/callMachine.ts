@@ -128,10 +128,25 @@ export const callMachine = setup({
         error: (event as Extract<CallEvent, { type: 'CALL_ERROR' }>).error,
       })
     ),
+
+    notifyParentTimeout: sendParent(
+      ({ context }): CallParentEvent => ({
+        type: 'CALL_ACTOR_ERROR',
+        callId: context.callId,
+        error: new Error('Call timed out') as any,
+      })
+    ),
   },
 
   guards: {
     isOutbound: ({ context }) => context.direction === 'outbound',
+  },
+
+  delays: {
+    /** Time to wait for an inbound call to be answered before auto-rejecting. */
+    RINGING_TIMEOUT: 30_000,
+    /** Time to wait for ICE negotiation to complete before giving up. */
+    CONNECTING_TIMEOUT: 30_000,
   },
 }).createMachine({
   id: 'call',
@@ -161,6 +176,12 @@ export const callMachine = setup({
             guard: 'isOutbound',
             target: 'connecting',
           },
+          after: {
+            RINGING_TIMEOUT: {
+              target: '#call.ended',
+              actions: ['closeCall', 'notifyParentTimeout'],
+            },
+          },
           on: {
             ANSWER: {
               // answer() must be called before PeerJS will emit 'stream'.
@@ -187,6 +208,12 @@ export const callMachine = setup({
           // Waiting for the remote media stream to arrive. This can take a
           // moment for ICE negotiation to complete. HANG_UP is accepted here
           // in case the user wants to cancel before the call is established.
+          after: {
+            CONNECTING_TIMEOUT: {
+              target: '#call.error',
+              actions: ['closeCall', 'notifyParentTimeout'],
+            },
+          },
           on: {
             CALL_STREAM: {
               target: 'live',

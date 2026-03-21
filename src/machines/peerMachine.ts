@@ -120,6 +120,20 @@ export const peerMachine = setup({
       context.peer.destroy();
     },
 
+    /**
+     * Cleanup all spawned connection/call actors when leaving the 'alive' state.
+     * Calls close() on every DataConnection and MediaConnection so PeerJS can
+     * tear down the underlying RTCPeerConnections properly.
+     */
+    cleanupAllActors: ({ context }) => {
+      for (const ref of Object.values(context.connections)) {
+        try { ref.send({ type: 'CLOSE' }); } catch { /* actor may already be stopped */ }
+      }
+      for (const ref of Object.values(context.calls)) {
+        try { ref.send({ type: 'HANG_UP' }); } catch { /* actor may already be stopped */ }
+      }
+    },
+
     // ── Context mutations ────────────────────────────────────────────────────
 
     assignPeerId: assign({
@@ -133,6 +147,12 @@ export const peerMachine = setup({
     }),
 
     clearLastError: assign({ lastError: null }),
+
+    incrementRetryCount: assign({
+      retryCount: ({ context }) => context.retryCount + 1,
+    }),
+
+    resetRetryCount: assign({ retryCount: 0 }),
 
     // ── Connection spawning ───────────────────────────────────────────────────
 
@@ -364,6 +384,30 @@ export const peerMachine = setup({
       const e = event as Extract<PeerCommand, { type: 'ANSWER_CALL' | 'REJECT_CALL' | 'HANG_UP' }>;
       return e.callId in context.calls;
     },
+
+    /** Prevents spawning duplicate connections to the same remote peer. */
+    connectionNotDuplicate: ({ context, event }) => {
+      const { remotePeerId } = event as Extract<PeerCommand, { type: 'CONNECT_TO' }>;
+      return !Object.values(context.connections).some(
+        ref => ref.getSnapshot().context.remotePeerId === remotePeerId
+      );
+    },
+
+    /** Prevents spawning duplicate calls to the same remote peer. */
+    callNotDuplicate: ({ context, event }) => {
+      const { remotePeerId } = event as Extract<PeerCommand, { type: 'CALL' }>;
+      return !Object.values(context.calls).some(
+        ref => ref.getSnapshot().context.remotePeerId === remotePeerId
+      );
+    },
+
+    canAutoReconnect: ({ context }) =>
+      context.retryCount < context.maxRetries,
+  },
+
+  delays: {
+    RECONNECT_DELAY: ({ context }) =>
+      Math.min(context.baseRetryDelay * 2 ** context.retryCount, 30_000),
   },
 }).createMachine({
   id: 'peer',
@@ -373,6 +417,9 @@ export const peerMachine = setup({
     connections: {},
     calls: {},
     lastError: null,
+    retryCount: 0,
+    maxRetries: input.maxRetries ?? 5,
+    baseRetryDelay: input.baseRetryDelay ?? 1000,
   }),
 
   initial: 'alive',
@@ -388,13 +435,22 @@ export const peerMachine = setup({
         src: 'peerEventSource',
         input: ({ context }) => context.peer,
       },
+      // Clean up all spawned actors when leaving 'alive' for any reason
+      exit: 'cleanupAllActors',
       initial: 'initializing',
+      on: {
+        // PeerJS fires 'close' after peer.destroy() — handle it at the
+        // compound state level so it works regardless of sub-state.
+        PEER_CLOSE: {
+          target: '#peer.destroyed',
+        },
+      },
       states: {
         initializing: {
           on: {
             PEER_OPEN: {
               target: 'ready',
-              actions: ['assignPeerId', 'clearLastError', 'emitPeerReady'],
+              actions: ['assignPeerId', 'clearLastError', 'resetRetryCount', 'emitPeerReady'],
             },
             PEER_ERROR: [
               {
@@ -416,6 +472,7 @@ export const peerMachine = setup({
               actions: 'spawnInboundConnection',
             },
             CONNECT_TO: {
+              guard: 'connectionNotDuplicate',
               actions: 'spawnOutboundConnection',
             },
             SEND: {
@@ -447,6 +504,7 @@ export const peerMachine = setup({
             },
             CALL: {
               // Outbound call — peer.call() is called inside spawnOutboundCall.
+              guard: 'callNotDuplicate',
               actions: 'spawnOutboundCall',
             },
             ANSWER_CALL: {
@@ -498,7 +556,16 @@ export const peerMachine = setup({
         },
 
         disconnected: {
+          // Automatic reconnection with exponential backoff
+          after: {
+            RECONNECT_DELAY: {
+              guard: 'canAutoReconnect',
+              target: 'initializing',
+              actions: ['incrementRetryCount', 'reconnectPeer'],
+            },
+          },
           on: {
+            // Manual reconnect bypasses the backoff timer
             RECONNECT: {
               target: 'initializing',
               actions: 'reconnectPeer',

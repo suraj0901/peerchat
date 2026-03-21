@@ -102,9 +102,21 @@ export type PeerContext = {
   connections: Record<string, ConnectionRef>;
   calls: Record<string, CallRef>;
   lastError: PeerError<string> | null;
+  /** Number of consecutive reconnection attempts. Reset on successful open. */
+  retryCount: number;
+  /** Maximum automatic reconnection attempts before giving up. */
+  readonly maxRetries: number;
+  /** Base delay in ms for exponential backoff (delay = base * 2^retryCount). */
+  readonly baseRetryDelay: number;
 };
 
-export type PeerInput = { peer: Peer };
+export type PeerInput = {
+  peer: Peer;
+  /** Maximum automatic reconnection attempts. Default: 5. */
+  maxRetries?: number;
+  /** Base delay in ms for exponential backoff. Default: 1000. */
+  baseRetryDelay?: number;
+};
 
 /** Events sent back from the PeerJS Peer event emitter. */
 export type PeerCallbackEvent =

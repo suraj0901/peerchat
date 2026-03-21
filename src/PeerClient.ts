@@ -251,9 +251,22 @@ export class PeerClient {
     } else {
       // Auto-acquire media, then place the call
       this.requestMedia(constraints);
-      const sub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
-        sub.unsubscribe();
+
+      const cleanup = () => {
+        readySub.unsubscribe();
+        deniedSub.unsubscribe();
+        errorSub.unsubscribe();
+      };
+
+      const readySub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
+        cleanup();
         this.send({ type: "CALL", remotePeerId, localStream: stream });
+      });
+      const deniedSub = this.mediaActor.on("media.permission.denied", () => {
+        cleanup();
+      });
+      const errorSub = this.mediaActor.on("media.stream.error", () => {
+        cleanup();
       });
     }
   }
@@ -282,9 +295,25 @@ export class PeerClient {
     } else {
       // Auto-acquire media, then answer
       this.requestMedia(constraints);
-      const sub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
-        sub.unsubscribe();
+
+      const cleanup = () => {
+        readySub.unsubscribe();
+        deniedSub.unsubscribe();
+        errorSub.unsubscribe();
+      };
+
+      const readySub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
+        cleanup();
         this.send({ type: "ANSWER_CALL", callId, localStream: stream });
+      });
+      const deniedSub = this.mediaActor.on("media.permission.denied", () => {
+        cleanup();
+        // Auto-reject the call since we can't acquire media
+        this.send({ type: "REJECT_CALL", callId });
+      });
+      const errorSub = this.mediaActor.on("media.stream.error", () => {
+        cleanup();
+        this.send({ type: "REJECT_CALL", callId });
       });
     }
   }
@@ -297,6 +326,15 @@ export class PeerClient {
   /** Hang up an active or connecting call. */
   public hangUp(callId: string) {
     this.send({ type: "HANG_UP", callId });
+  }
+
+  /**
+   * Retry media acquisition after permission was denied.
+   * Transitions the media machine from 'denied' back to 'idle' so that
+   * a subsequent `requestMedia()` or `requestScreen()` can be attempted.
+   */
+  public retryMedia() {
+    this.mediaActor.send({ type: "RETRY" });
   }
 
   // ── Peer lifecycle ──────────────────────────────────────────────────────────

@@ -47,7 +47,8 @@ export type MediaDeviceCommand =
   | { type: 'REQUEST'; constraints: MediaStreamConstraints }
   | { type: 'REQUEST_SCREEN'; constraints?: DisplayMediaStreamOptions }
   | { type: 'STOP' }
-  | { type: 'SWITCH_DEVICE'; kind: 'audio' | 'video'; deviceId: string };
+  | { type: 'SWITCH_DEVICE'; kind: 'audio' | 'video'; deviceId: string }
+  | { type: 'RETRY' };
 
 export type MediaDeviceEvent = MediaDeviceCallbackEvent | MediaDeviceCommand;
 
