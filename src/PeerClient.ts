@@ -337,6 +337,26 @@ export class PeerClient {
     this.mediaActor.send({ type: "RETRY" });
   }
 
+  // ── Audio output ───────────────────────────────────────────────────────────
+
+  /**
+   * Route audio playback to a different output device (speaker/headphones).
+   * Requires browser support for `HTMLMediaElement.setSinkId()`.
+   *
+   * @param deviceId - The target audio output device ID
+   * @param audioElement - The HTMLAudioElement playing remote audio
+   * @throws If the browser doesn't support setSinkId or the device switch fails
+   */
+  public async switchSpeaker(
+    deviceId: string,
+    audioElement: HTMLAudioElement,
+  ): Promise<void> {
+    if (typeof audioElement.setSinkId !== "function") {
+      throw new Error("setSinkId is not supported in this browser");
+    }
+    await audioElement.setSinkId(deviceId);
+  }
+
   // ── Peer lifecycle ──────────────────────────────────────────────────────────
 
   /** Reconnect to the signaling server after a disconnection. */
