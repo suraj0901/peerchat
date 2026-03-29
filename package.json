@@ -48,7 +48,6 @@
     "peerjs": "^1.5.5"
   },
   "dependencies": {
-    "neverthrow": "^8.2.0",
     "peerjs": "^1.5.5",
     "xstate": "^5.28.0"
   }

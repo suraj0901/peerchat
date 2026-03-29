@@ -10,11 +10,6 @@ import {
   type MediaMode,
   type PermissionStatus,
 } from "./machines";
-import {
-  getCameras,
-  getMicrophones,
-  getSpeakers,
-} from "./device";
 
 // ── Unified event map ─────────────────────────────────────────────────────────
 
@@ -320,6 +315,47 @@ export class PeerClient {
     this.peerActor.send(event);
   }
 
+  /**
+   * Ensures a local MediaStream is available before executing a callback.
+   * If the media machine already has an active stream, `onStream` fires
+   * immediately. Otherwise, media is auto-requested and `onStream` fires
+   * once the stream is ready. On permission denial or error, `onError`
+   * (if provided) is called instead.
+   */
+  private withMedia(
+    constraints: MediaStreamConstraints,
+    onStream: (stream: MediaStream) => void,
+    onError?: () => void,
+  ) {
+    const snapshot = this.mediaActor.getSnapshot();
+
+    if (snapshot.matches("active") && snapshot.context.stream) {
+      onStream(snapshot.context.stream);
+      return;
+    }
+
+    this.requestMedia(constraints);
+
+    const cleanup = () => {
+      readySub.unsubscribe();
+      deniedSub.unsubscribe();
+      errorSub.unsubscribe();
+    };
+
+    const readySub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
+      cleanup();
+      onStream(stream);
+    });
+    const deniedSub = this.mediaActor.on("media.permission.denied", () => {
+      cleanup();
+      onError?.();
+    });
+    const errorSub = this.mediaActor.on("media.stream.error", () => {
+      cleanup();
+      onError?.();
+    });
+  }
+
   // ── Data connections ────────────────────────────────────────────────────────
 
   /** Initiate a data connection to a remote peer. */
@@ -354,35 +390,9 @@ export class PeerClient {
     remotePeerId: string,
     constraints: MediaStreamConstraints = { audio: true, video: true },
   ) {
-    const snapshot = this.mediaActor.getSnapshot();
-
-    if (snapshot.matches("active") && snapshot.context.stream) {
-      this.send({
-        type: "CALL",
-        remotePeerId,
-        localStream: snapshot.context.stream,
-      });
-    } else {
-      // Auto-acquire media, then place the call
-      this.requestMedia(constraints);
-
-      const cleanup = () => {
-        readySub.unsubscribe();
-        deniedSub.unsubscribe();
-        errorSub.unsubscribe();
-      };
-
-      const readySub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
-        cleanup();
-        this.send({ type: "CALL", remotePeerId, localStream: stream });
-      });
-      const deniedSub = this.mediaActor.on("media.permission.denied", () => {
-        cleanup();
-      });
-      const errorSub = this.mediaActor.on("media.stream.error", () => {
-        cleanup();
-      });
-    }
+    this.withMedia(constraints, (stream) => {
+      this.send({ type: "CALL", remotePeerId, localStream: stream });
+    });
   }
 
   /**
@@ -398,38 +408,16 @@ export class PeerClient {
     callId: string,
     constraints: MediaStreamConstraints = { audio: true, video: true },
   ) {
-    const snapshot = this.mediaActor.getSnapshot();
-
-    if (snapshot.matches("active") && snapshot.context.stream) {
-      this.send({
-        type: "ANSWER_CALL",
-        callId,
-        localStream: snapshot.context.stream,
-      });
-    } else {
-      // Auto-acquire media, then answer
-      this.requestMedia(constraints);
-
-      const cleanup = () => {
-        readySub.unsubscribe();
-        deniedSub.unsubscribe();
-        errorSub.unsubscribe();
-      };
-
-      const readySub = this.mediaActor.on("media.stream.ready", ({ stream }) => {
-        cleanup();
+    this.withMedia(
+      constraints,
+      (stream) => {
         this.send({ type: "ANSWER_CALL", callId, localStream: stream });
-      });
-      const deniedSub = this.mediaActor.on("media.permission.denied", () => {
-        cleanup();
+      },
+      () => {
         // Auto-reject the call since we can't acquire media
         this.send({ type: "REJECT_CALL", callId });
-      });
-      const errorSub = this.mediaActor.on("media.stream.error", () => {
-        cleanup();
-        this.send({ type: "REJECT_CALL", callId });
-      });
-    }
+      },
+    );
   }
 
   /** Reject an incoming call without answering. */
@@ -509,10 +497,4 @@ export class PeerClient {
     this.mediaActor.send({ type: "STOP" });
     this.mediaActor.stop();
   }
-
-  // ── Static device utilities ─────────────────────────────────────────────────
-
-  public static getMicrophones = getMicrophones;
-  public static getCameras = getCameras;
-  public static getSpeakers = getSpeakers;
 }

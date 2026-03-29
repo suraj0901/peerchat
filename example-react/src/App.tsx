@@ -185,12 +185,12 @@ function App() {
   // =====================================================================
   // 1. LOADING SCREEN — checking permissions
   // =====================================================================
-  if (permissionState === "checking") {
+  if (permissionState === "prompt") {
     return (
       <div className="app">
-        <div className="screen screen--center">
+        <div className="screen screen-center">
           <div className="loader" />
-          <p className="loader-text">Checking media permissions…</p>
+          {/* <p className="loader-text">Checking media permissions…</p> */}
         </div>
       </div>
     );
