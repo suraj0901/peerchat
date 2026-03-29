@@ -1,6 +1,38 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { usePeer } from "./usePeer";
 import "./App.css";
+
+// ── Notification types & helpers ─────────────────────────────────────────────
+
+type AppNotification = {
+  id: number;
+  type: "error" | "warning" | "info";
+  title: string;
+  message: string;
+};
+
+let notifCounter = 0;
+
+function useNotifications() {
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  const add = useCallback(
+    (type: AppNotification["type"], title: string, message: string) => {
+      const id = ++notifCounter;
+      setNotifications((prev) => [...prev, { id, type, title, message }]);
+      setTimeout(() => {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+      }, 8000);
+    },
+    [],
+  );
+
+  const dismiss = useCallback((id: number) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  return { notifications, add, dismiss };
+}
 
 // ── SVG Icons (inline for zero-dep) ──────────────────────────────────────────
 
@@ -93,31 +125,64 @@ const Icons = {
 
 function App() {
   const {
-    permissionState,
+    client,
     peerId,
     peerState,
     mediaState,
     localStream,
     remoteStream,
     devices,
+    permissions,
     incomingCall,
     messages,
-    notifications,
+    activeCallId,
     audioEnabled,
     videoEnabled,
 
-    makeCall,
-    answerCall,
-    rejectCall,
-    hangUp,
-    requestMedia,
-    stopMedia,
-    switchDevice,
     toggleAudio,
     toggleVideo,
     sendMessage,
-    dismissNotification,
   } = usePeer();
+
+  const { notifications, add: addNotification, dismiss: dismissNotification } = useNotifications();
+
+  // ── Wire up PeerClient events → notifications (UI concern lives here) ──
+  useEffect(() => {
+    if (!client) return;
+    const unsubs = [
+      client.on("peer.error", (e: any) => {
+        addNotification("error", "Connection Error", e.error.message);
+      }),
+      client.on("peer.disconnected", () => {
+        addNotification("warning", "Disconnected", "Lost connection to the signaling server. Reconnecting…");
+      }),
+      client.on("connection.error", (e: any) => {
+        addNotification("error", "Connection Error", e.error.message);
+      }),
+      client.on("media.stream.error", (e: any) => {
+        addNotification("error", "Media Error", e.error.message);
+      }),
+      client.on("media.permission.denied", () => {
+        addNotification("error", "Permission Denied", "Camera/microphone access was denied.");
+      }),
+      client.on("media.track.ended", (e: any) => {
+        addNotification("info", "Track Lost", `Your ${e.kind} track ended. Recovering…`);
+      }),
+      client.on("media.device.switched", (e: any) => {
+        addNotification("info", "Device Switched", `${e.kind === "audio" ? "Microphone" : "Camera"} switched.`);
+      }),
+      client.on("media.device.switch.failed", (e: any) => {
+        addNotification("error", "Switch Failed", `Could not switch ${e.kind}: ${e.error.message}`);
+      }),
+      client.on("call.ended", () => {
+        addNotification("info", "Call Ended", "The call has ended.");
+      }),
+      client.on("call.error", (e: any) => {
+        addNotification("error", "Call Error", e.error.message);
+      }),
+    ];
+    return () => unsubs.forEach((s) => s.unsubscribe());
+  }, [client, addNotification]);
 
   const [targetId, setTargetId] = useState("");
   const [chatMsg, setChatMsg] = useState("");
@@ -157,9 +222,17 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const permissionState =
+    permissions.camera === "denied" && permissions.microphone === "denied"
+      ? ("denied" as const)
+      : permissions.camera === "granted" || permissions.microphone === "granted"
+        ? ("granted" as const)
+        : ("prompt" as const);
+
   const handleCall = () => {
-    if (!targetId.trim()) return;
-    makeCall(targetId.trim());
+    if (!targetId.trim() || !client) return;
+    client.call(targetId.trim());
+    client.connect(targetId.trim());
   };
 
   const handleCallKeyDown = (e: React.KeyboardEvent) => {
@@ -175,8 +248,8 @@ function App() {
 
   // ── Device selectors ──────────────────────────────────────────────────
 
-  const cameras = devices.filter((d) => d.kind === "videoinput");
-  const microphones = devices.filter((d) => d.kind === "audioinput");
+  const cameras = devices.filter((d: MediaDeviceInfo) => d.kind === "videoinput");
+  const microphones = devices.filter((d: MediaDeviceInfo) => d.kind === "audioinput");
 
   // ── Determine which screen to render ──────────────────────────────────
 
@@ -249,13 +322,13 @@ function App() {
             <div className="incoming-actions">
               <button
                 className="btn btn--accept"
-                onClick={() => answerCall(incomingCall.callId)}
+                onClick={() => client?.answerCall(incomingCall.callId)}
               >
                 {Icons.phone} Accept
               </button>
               <button
                 className="btn btn--reject"
-                onClick={() => rejectCall(incomingCall.callId)}
+                onClick={() => client?.rejectCall(incomingCall.callId)}
               >
                 {Icons.phoneOff} Reject
               </button>
@@ -346,11 +419,11 @@ function App() {
             {/* Media toggle */}
             <div className="home-media-row">
               {!localStream ? (
-                <button className="btn btn--secondary" onClick={() => requestMedia()}>
+                <button className="btn btn--secondary" onClick={() => client?.requestMedia()}>
                   {Icons.camera} Preview Camera
                 </button>
               ) : (
-                <button className="btn btn--secondary" onClick={stopMedia}>
+                <button className="btn btn--secondary" onClick={() => client?.stopMedia()}>
                   {Icons.cameraOff} Stop Preview
                 </button>
               )}
@@ -409,10 +482,10 @@ function App() {
                   {microphones.length > 1 && (
                     <select
                       className="device-select"
-                      onChange={(e) => switchDevice("audio", e.target.value)}
+                      onChange={(e) => client?.switchDevice("audio", e.target.value)}
                       title="Select microphone"
                     >
-                      {microphones.map((d) => (
+                      {microphones.map((d: MediaDeviceInfo) => (
                         <option key={d.deviceId} value={d.deviceId}>
                           {d.label || `Mic ${d.deviceId.slice(0, 5)}`}
                         </option>
@@ -434,10 +507,10 @@ function App() {
                   {cameras.length > 1 && (
                     <select
                       className="device-select"
-                      onChange={(e) => switchDevice("video", e.target.value)}
+                      onChange={(e) => client?.switchDevice("video", e.target.value)}
                       title="Select camera"
                     >
-                      {cameras.map((d) => (
+                      {cameras.map((d: MediaDeviceInfo) => (
                         <option key={d.deviceId} value={d.deviceId}>
                           {d.label || `Cam ${d.deviceId.slice(0, 5)}`}
                         </option>
@@ -460,7 +533,7 @@ function App() {
               {/* Hang up */}
               <button
                 className="ctrl-btn ctrl-btn--hangup"
-                onClick={hangUp}
+                onClick={() => { if (activeCallId) client?.hangUp(activeCallId); }}
                 title="Hang up"
                 id="hangup-button"
               >
@@ -482,7 +555,7 @@ function App() {
                 {messages.length === 0 && (
                   <p className="chat-empty">No messages yet. Say hello!</p>
                 )}
-                {messages.map((m, i) => (
+                {messages.map((m: { sender: string; data: unknown }, i: number) => (
                   <div
                     key={i}
                     className={`chat-bubble ${m.sender === "local" ? "chat-bubble--sent" : "chat-bubble--received"}`}
