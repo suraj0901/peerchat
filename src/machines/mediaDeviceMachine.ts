@@ -7,6 +7,7 @@ import type {
   MediaDeviceEmittedEvent,
   MediaDeviceCommand,
   MediaMode,
+  PermissionStatus,
 } from './mediaDeviceTypes';
 
 // ── Actor I/O types ───────────────────────────────────────────────────────────
@@ -31,6 +32,11 @@ type SwitchDeviceInput = {
 type SwitchDeviceOutput = {
   stream: MediaStream;
   kind: 'audio' | 'video';
+};
+
+const DEFAULT_PERMISSIONS: PermissionStatus = {
+  camera: 'unknown',
+  microphone: 'unknown',
 };
 
 // ── Actors ────────────────────────────────────────────────────────────────────
@@ -150,6 +156,67 @@ const streamMonitorSource = fromCallback<MediaDeviceCallbackEvent, MediaStream>(
   }
 );
 
+/**
+ * Queries the Permissions API for both camera and microphone permission states.
+ * Falls back to 'unknown' if the browser doesn't support the Permissions API.
+ */
+const checkPermissionsActor = fromPromise<PermissionStatus>(
+  async () => {
+    if (!navigator.permissions?.query) {
+      return DEFAULT_PERMISSIONS;
+    }
+    const [cam, mic] = await Promise.all([
+      navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
+      navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
+    ]);
+    return {
+      camera: (cam?.state as PermissionStatus['camera']) ?? 'unknown',
+      microphone: (mic?.state as PermissionStatus['microphone']) ?? 'unknown',
+    };
+  }
+);
+
+/**
+ * Monitors `PermissionStatus.onchange` for both camera and microphone.
+ * On any change, re-queries both statuses and sends the updated result
+ * back to the machine via `PERMISSION_CHANGED_INTERNAL`.
+ *
+ * Runs for the machine's lifetime via a root-level invocation.
+ */
+const permissionMonitorSource = fromCallback<MediaDeviceCallbackEvent>(
+  ({ sendBack }) => {
+    if (!navigator.permissions?.query) return;
+
+    let camStatus: globalThis.PermissionStatus | null = null;
+    let micStatus: globalThis.PermissionStatus | null = null;
+
+    const requery = () => {
+      sendBack({
+        type: 'PERMISSION_CHANGED_INTERNAL',
+        permissions: {
+          camera: (camStatus?.state as PermissionStatus['camera']) ?? 'unknown',
+          microphone: (micStatus?.state as PermissionStatus['microphone']) ?? 'unknown',
+        },
+      });
+    };
+
+    void (async () => {
+      [camStatus, micStatus] = await Promise.all([
+        navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
+        navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
+      ]);
+
+      if (camStatus) camStatus.onchange = requery;
+      if (micStatus) micStatus.onchange = requery;
+    })();
+
+    return () => {
+      if (camStatus) camStatus.onchange = null;
+      if (micStatus) micStatus.onchange = null;
+    };
+  }
+);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const isPermissionDenied = (error: unknown): boolean =>
@@ -217,7 +284,7 @@ export const mediaDeviceMachine = setup({
     input: {} as MediaDeviceInput,
     emitted: {} as MediaDeviceEmittedEvent,
   },
-  actors: { acquireStreamActor, switchDeviceActor, streamMonitorSource },
+  actors: { acquireStreamActor, switchDeviceActor, streamMonitorSource, checkPermissionsActor, permissionMonitorSource },
 
   actions: {
     // ── Context ───────────────────────────────────────────────────────────────
@@ -319,6 +386,29 @@ export const mediaDeviceMachine = setup({
       error: toError((event as unknown as { error: unknown }).error),
     })),
 
+    assignPermissions: assign({
+      permissions: ({ event }) =>
+        (event as unknown as { output: PermissionStatus }).output,
+    }),
+
+    assignPermissionsFromEvent: assign({
+      permissions: ({ event }) =>
+        (event as Extract<MediaDeviceCallbackEvent, { type: 'PERMISSION_CHANGED_INTERNAL' }>)
+          .permissions,
+    }),
+
+    emitPermissionStatus: emit(({ event }): MediaDeviceEmittedEvent => ({
+      type: 'media.permission.status',
+      permissions: (event as unknown as { output: PermissionStatus }).output,
+    })),
+
+    emitPermissionStatusFromEvent: emit(({ event }): MediaDeviceEmittedEvent => ({
+      type: 'media.permission.status',
+      permissions: (
+        event as Extract<MediaDeviceCallbackEvent, { type: 'PERMISSION_CHANGED_INTERNAL' }>
+      ).permissions,
+    })),
+
     emitDevicesUpdated: emit(({ event }): MediaDeviceEmittedEvent => ({
       type: 'media.devices.updated',
       devices: (
@@ -344,6 +434,20 @@ export const mediaDeviceMachine = setup({
     lastError: null,
     pendingSwitchKind: null,
     pendingSwitchDeviceId: null,
+    permissions: DEFAULT_PERMISSIONS,
+  },
+
+  // Root-level permission monitor — runs for the machine's lifetime
+  invoke: {
+    id: 'permissionMonitor',
+    src: 'permissionMonitorSource',
+  },
+
+  // Root-level handler for reactive permission changes (fires in any state)
+  on: {
+    PERMISSION_CHANGED_INTERNAL: {
+      actions: ['assignPermissionsFromEvent', 'emitPermissionStatusFromEvent'],
+    },
   },
 
   initial: 'idle',
@@ -358,6 +462,7 @@ export const mediaDeviceMachine = setup({
           target: 'requesting',
           actions: 'assignScreenRequest',
         },
+        CHECK_PERMISSIONS: 'checkingPermissions',
       },
     },
 
@@ -540,6 +645,24 @@ export const mediaDeviceMachine = setup({
     denied: {
       on: {
         RETRY: 'idle',
+      },
+    },
+
+    /**
+     * Queries the Permissions API for camera and microphone status.
+     * Transient state — immediately resolves and returns to idle.
+     * On error (e.g. browser doesn't support Permissions API), returns
+     * to idle silently with permissions unchanged.
+     */
+    checkingPermissions: {
+      invoke: {
+        id: 'checkPermissions',
+        src: 'checkPermissionsActor',
+        onDone: {
+          target: 'idle',
+          actions: ['assignPermissions', 'emitPermissionStatus'],
+        },
+        onError: 'idle',
       },
     },
   },

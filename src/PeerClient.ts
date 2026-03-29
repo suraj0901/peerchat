@@ -1,4 +1,4 @@
-import type { Peer } from "peerjs";
+import type { Peer, PeerError } from "peerjs";
 import { createActor, type Actor } from "xstate";
 import {
   peerMachine,
@@ -8,6 +8,7 @@ import {
   type MediaDeviceEmittedEvent,
   type MediaDeviceCommand,
   type MediaMode,
+  type PermissionStatus,
 } from "./machines";
 import {
   getCameras,
@@ -24,6 +25,62 @@ type PeerClientEvents = {
     payload: Extract<AllEmittedEvents, { type: K }>,
   ) => void;
 };
+
+// ── Reactive state snapshot ───────────────────────────────────────────────────
+
+/**
+ * Flat projection of both the peer and media machine snapshots.
+ * Subscribers receive a new object on every state change from either machine.
+ */
+export type PeerClientState = {
+  // Peer
+  peerId: string | null;
+  peerState: 'initializing' | 'ready' | 'disconnected' | 'error' | 'destroyed';
+  peerError: PeerError<string> | null;
+  // Media
+  mediaState: string;
+  localStream: MediaStream | null;
+  devices: MediaDeviceInfo[];
+  mediaMode: MediaMode;
+  mediaError: Error | null;
+  permissions: PermissionStatus;
+};
+
+export type Subscription = { unsubscribe: () => void };
+
+type PeerSnapshot = ReturnType<Actor<typeof peerMachine>['getSnapshot']>;
+type MediaSnapshot = ReturnType<Actor<typeof mediaDeviceMachine>['getSnapshot']>;
+
+/**
+ * Maps the hierarchical peer machine state value to a flat string.
+ * XState state values are `{ alive: 'ready' }` for compound states and
+ * `'error'` / `'destroyed'` for top-level final states.
+ */
+function derivePeerState(
+  value: PeerSnapshot['value'],
+): PeerClientState['peerState'] {
+  if (typeof value === 'string') {
+    return value as 'error' | 'destroyed';
+  }
+  return (value as { alive: string }).alive as 'initializing' | 'ready' | 'disconnected';
+}
+
+function deriveState(
+  peerSnap: PeerSnapshot,
+  mediaSnap: MediaSnapshot,
+): PeerClientState {
+  return {
+    peerId: peerSnap.context.peerId,
+    peerState: derivePeerState(peerSnap.value),
+    peerError: peerSnap.context.lastError,
+    mediaState: mediaSnap.value as string,
+    localStream: mediaSnap.context.stream,
+    devices: mediaSnap.context.devices,
+    mediaMode: mediaSnap.context.mode,
+    mediaError: mediaSnap.context.lastError,
+    permissions: mediaSnap.context.permissions,
+  };
+}
 
 // ── PeerClient ────────────────────────────────────────────────────────────────
 
@@ -111,6 +168,54 @@ export class PeerClient {
     );
   }
 
+  /**
+   * Subscribe to a unified reactive state snapshot that combines both the peer
+   * and media machine states into a single flat object.
+   *
+   * The listener fires synchronously whenever **either** machine transitions.
+   * Use this for derived/display state. For one-shot side-effects (toasts,
+   * modals), prefer the event-based `on()` API instead.
+   *
+   * Returns a `{ unsubscribe }` handle.
+   *
+   * @example
+   * ```typescript
+   * const sub = client.subscribe((state) => {
+   *   console.log(state.peerState, state.mediaState, state.localStream);
+   * });
+   * // later:
+   * sub.unsubscribe();
+   * ```
+   */
+  public subscribe(listener: (state: PeerClientState) => void): Subscription {
+    // Emit immediately so the subscriber doesn't have to wait for a transition
+    listener(deriveState(
+      this.peerActor.getSnapshot(),
+      this.mediaActor.getSnapshot(),
+    ));
+
+    const peerSub = this.peerActor.subscribe(() => {
+      listener(deriveState(
+        this.peerActor.getSnapshot(),
+        this.mediaActor.getSnapshot(),
+      ));
+    });
+
+    const mediaSub = this.mediaActor.subscribe(() => {
+      listener(deriveState(
+        this.peerActor.getSnapshot(),
+        this.mediaActor.getSnapshot(),
+      ));
+    });
+
+    return {
+      unsubscribe: () => {
+        peerSub.unsubscribe();
+        mediaSub.unsubscribe();
+      },
+    };
+  }
+
   // ── Peer state ──────────────────────────────────────────────────────────────
 
   /** The local peer ID assigned by the signaling server. */
@@ -151,6 +256,15 @@ export class PeerClient {
   /** The last media-related error, or `null`. */
   public get mediaError(): Error | null {
     return this.mediaActor.getSnapshot().context.lastError;
+  }
+
+  /**
+   * Current permission status for camera and microphone.
+   * Initially `{ camera: 'unknown', microphone: 'unknown' }` until
+   * `checkPermissions()` is called or a permission change is detected.
+   */
+  public get permissions(): PermissionStatus {
+    return this.mediaActor.getSnapshot().context.permissions;
   }
 
   // ── Media commands ──────────────────────────────────────────────────────────
@@ -335,6 +449,28 @@ export class PeerClient {
    */
   public retryMedia() {
     this.mediaActor.send({ type: "RETRY" });
+  }
+
+  /**
+   * Query the browser's Permissions API for camera and microphone status
+   * without acquiring a stream. Emits `media.permission.status` with the
+   * result and updates `client.permissions`.
+   *
+   * Permission changes are also monitored reactively — if the user grants
+   * or revokes permission in browser settings, `media.permission.status`
+   * will fire automatically.
+   *
+   * @example
+   * ```typescript
+   * client.on('media.permission.status', ({ permissions }) => {
+   *   if (permissions.camera === 'granted') showCallUI();
+   *   else showPermissionSetup();
+   * });
+   * client.checkPermissions();
+   * ```
+   */
+  public checkPermissions() {
+    this.mediaActor.send({ type: "CHECK_PERMISSIONS" });
   }
 
   // ── Audio output ───────────────────────────────────────────────────────────

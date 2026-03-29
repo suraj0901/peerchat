@@ -1,6 +1,7 @@
 // Public API
 
 export { PeerClient } from './PeerClient';
+export type { PeerClientState, Subscription } from './PeerClient';
 export * from './errors';
 
 // Export machine factory for full typescript support downstream

@@ -6,6 +6,20 @@
  */
 export type MediaMode = 'user' | 'screen';
 
+/**
+ * Represents the current state of a browser permission.
+ *   granted  — permission has been explicitly granted.
+ *   denied   — permission has been explicitly denied.
+ *   prompt   — permission will trigger a user prompt.
+ *   unknown  — permissions have not been checked yet (initial state).
+ */
+export type PermissionState = 'granted' | 'denied' | 'prompt' | 'unknown';
+
+export type PermissionStatus = {
+  camera: PermissionState;
+  microphone: PermissionState;
+};
+
 export type MediaDeviceContext = {
   stream: MediaStream | null;
   /** Constraints used for the most recent getUserMedia call. Reused during recovery. */
@@ -22,6 +36,8 @@ export type MediaDeviceContext = {
    */
   pendingSwitchKind: 'audio' | 'video' | null;
   pendingSwitchDeviceId: string | null;
+  /** Current permission status for camera and microphone. */
+  permissions: PermissionStatus;
 };
 
 export type MediaDeviceInput = Record<string, never>;
@@ -32,7 +48,8 @@ export type MediaDeviceInput = Record<string, never>;
  */
 export type MediaDeviceCallbackEvent =
   | { type: 'TRACK_ENDED_INTERNAL'; kind: 'audio' | 'video' }
-  | { type: 'DEVICES_ENUMERATED_INTERNAL'; devices: MediaDeviceInfo[] };
+  | { type: 'DEVICES_ENUMERATED_INTERNAL'; devices: MediaDeviceInfo[] }
+  | { type: 'PERMISSION_CHANGED_INTERNAL'; permissions: PermissionStatus };
 
 /**
  * Commands sent into the machine by external callers.
@@ -48,7 +65,8 @@ export type MediaDeviceCommand =
   | { type: 'REQUEST_SCREEN'; constraints?: DisplayMediaStreamOptions }
   | { type: 'STOP' }
   | { type: 'SWITCH_DEVICE'; kind: 'audio' | 'video'; deviceId: string }
-  | { type: 'RETRY' };
+  | { type: 'RETRY' }
+  | { type: 'CHECK_PERMISSIONS' };
 
 export type MediaDeviceEvent = MediaDeviceCallbackEvent | MediaDeviceCommand;
 
@@ -76,4 +94,5 @@ export type MediaDeviceEmittedEvent =
   | { type: 'media.recovering' }
   | { type: 'media.device.switched'; kind: 'audio' | 'video'; stream: MediaStream }
   | { type: 'media.device.switch.failed'; kind: 'audio' | 'video'; error: Error }
-  | { type: 'media.devices.updated'; devices: MediaDeviceInfo[] };
+  | { type: 'media.devices.updated'; devices: MediaDeviceInfo[] }
+  | { type: 'media.permission.status'; permissions: PermissionStatus };

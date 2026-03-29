@@ -41,4 +41,6 @@ export type {
   MediaDeviceCommand,
   MediaDeviceEmittedEvent,
   MediaMode,
+  PermissionState,
+  PermissionStatus,
 } from './mediaDeviceTypes';
