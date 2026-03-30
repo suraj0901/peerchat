@@ -26,29 +26,6 @@ import { isFatalError } from './types';
 const emit = (event: PeerEmittedEvent): PeerEffect =>
   ({ type: 'emit', event });
 
-/** Start listening to PeerJS Peer events. */
-function startPeerListener(peer: Peer): PeerEffect {
-  return {
-    type: 'startSubscription',
-    id: 'peerEvents',
-    subscribe: (send) => {
-      peer.on('open', (id) => send({ type: 'PEER_OPEN', id }));
-      peer.on('connection', (connection: DataConnection) =>
-        send({ type: 'PEER_CONNECTION', connection }));
-      peer.on('call', (call: MediaConnection) =>
-        send({ type: 'PEER_CALL', call }));
-      peer.on('disconnected', () => send({ type: 'PEER_DISCONNECTED' }));
-      peer.on('error', (error: PeerError<string>) =>
-        send({ type: 'PEER_ERROR', error }));
-      peer.on('close', () => send({ type: 'PEER_CLOSE' }));
-
-      return () => {
-        // PeerJS does not support removeListener — teardown is via peer.destroy()
-      };
-    },
-  };
-}
-
 const stopPeerListener: PeerEffect = { type: 'stopSubscription', id: 'peerEvents' };
 
 /** Create a connection child machine and wire its parent events. */
@@ -216,7 +193,7 @@ export function createPeerTransition(parentSend: (event: PeerEvent) => void) {
             for (const child of state.connections.values()) {
               const childState = child.getState();
               if ((childState._tag === 'connecting' || childState._tag === 'open') &&
-                  childState.remotePeerId === event.remotePeerId) {
+                childState.remotePeerId === event.remotePeerId) {
                 return [state, []]; // Duplicate — ignore
               }
             }
@@ -279,7 +256,7 @@ export function createPeerTransition(parentSend: (event: PeerEvent) => void) {
             for (const child of state.calls.values()) {
               const childState = child.getState();
               if ((childState._tag === 'ringing' || childState._tag === 'connecting' || childState._tag === 'live') &&
-                  childState.remotePeerId === event.remotePeerId) {
+                childState.remotePeerId === event.remotePeerId) {
                 return [state, []]; // Duplicate — ignore
               }
             }
