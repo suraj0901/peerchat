@@ -56,7 +56,7 @@ export type CallEnded = {
 export type CallError = {
   readonly _tag: 'error';
   readonly callId: string;
-  readonly error: PeerError<string>;
+  readonly error: Error | PeerError<string>;
 };
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export type CallCommand =
 export type CallInternalEvent =
   | { type: 'CALL_STREAM'; stream: MediaStream }
   | { type: 'CALL_CLOSE' }
-  | { type: 'CALL_ERROR'; error: PeerError<string> }
+  | { type: 'CALL_ERROR'; error: Error | PeerError<string> }
   | { type: 'RINGING_TIMEOUT' }
   | { type: 'CONNECTING_TIMEOUT' };
 
@@ -80,7 +80,7 @@ export type CallEvent = CallCommand | CallInternalEvent;
 export type CallParentEvent =
   | { type: 'CALL_ACTIVE'; callId: string; remotePeerId: string; remoteStream: MediaStream }
   | { type: 'CALL_ENDED'; callId: string }
-  | { type: 'CALL_ERROR_PARENT'; callId: string; error: PeerError<string> };
+  | { type: 'CALL_ERROR_PARENT'; callId: string; error: Error | PeerError<string> };
 
 // ── Effects ───────────────────────────────────────────────────────────────────
 

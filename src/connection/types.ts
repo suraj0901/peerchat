@@ -31,7 +31,7 @@ export type ConnectionClosed = {
 export type ConnectionError = {
   readonly _tag: 'error';
   readonly connectionId: string;
-  readonly error: PeerError<string>;
+  readonly error: Error | PeerError<string>;
 };
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ export type ConnectionInternalEvent =
   | { type: 'CONNECTION_OPEN' }
   | { type: 'CONNECTION_DATA'; data: unknown }
   | { type: 'CONNECTION_CLOSE' }
-  | { type: 'CONNECTION_ERROR'; error: PeerError<string> }
+  | { type: 'CONNECTION_ERROR'; error: Error | PeerError<string> }
   | { type: 'CONNECTION_TIMEOUT' };
 
 export type ConnectionEvent = ConnectionCommand | ConnectionInternalEvent;
@@ -58,7 +58,7 @@ export type ConnectionEvent = ConnectionCommand | ConnectionInternalEvent;
 export type ConnectionParentEvent =
   | { type: 'CONNECTION_OPENED'; connectionId: string; remotePeerId: string }
   | { type: 'CONNECTION_CLOSED'; connectionId: string }
-  | { type: 'CONNECTION_ERROR_PARENT'; connectionId: string; error: PeerError<string> }
+  | { type: 'CONNECTION_ERROR_PARENT'; connectionId: string; error: Error | PeerError<string> }
   | { type: 'CONNECTION_DATA_RECEIVED'; connectionId: string; data: unknown };
 
 // ── Effects ───────────────────────────────────────────────────────────────────

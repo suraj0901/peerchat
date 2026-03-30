@@ -42,7 +42,7 @@ export function createPeerManager(input: PeerInput): PeerMachine {
       peer.on('connection', (connection) => send({ type: 'PEER_CONNECTION', connection }));
       peer.on('call', (call) => send({ type: 'PEER_CALL', call }));
       peer.on('disconnected', () => send({ type: 'PEER_DISCONNECTED' }));
-      peer.on('error', (error: any) => send({ type: 'PEER_ERROR', error }));
+      peer.on('error', (error) => send({ type: 'PEER_ERROR', error }));
       peer.on('close', () => send({ type: 'PEER_CLOSE' }));
 
       return () => {

@@ -1,13 +1,13 @@
 import type { Peer, PeerError, DataConnection, MediaConnection } from 'peerjs';
 import type { Effect } from '../core/types';
 import type { Machine } from '../core/runtime';
-import type { ConnectionEvent, ConnectionParentEvent } from '../connection/types';
-import type { CallEvent, CallParentEvent } from '../call/types';
+import type { ConnectionState, ConnectionEvent, ConnectionParentEvent } from '../connection/types';
+import type { CallState, CallEvent, CallParentEvent } from '../call/types';
 
 // ── Child Machine Types ───────────────────────────────────────────────────────
 
-export type ConnectionChild = Machine<any, ConnectionEvent, ConnectionParentEvent>;
-export type CallChild = Machine<any, CallEvent, CallParentEvent>;
+export type ConnectionChild = Machine<ConnectionState, ConnectionEvent, ConnectionParentEvent>;
+export type CallChild = Machine<CallState, CallEvent, CallParentEvent>;
 
 // ── Peer State (Discriminated Union) ──────────────────────────────────────────
 
@@ -75,11 +75,11 @@ export type PeerCallbackEvent =
 export type ChildEvent =
   | { type: 'CHILD_CONNECTION_OPENED'; connectionId: string; remotePeerId: string }
   | { type: 'CHILD_CONNECTION_CLOSED'; connectionId: string }
-  | { type: 'CHILD_CONNECTION_ERROR'; connectionId: string; error: PeerError<string> }
+  | { type: 'CHILD_CONNECTION_ERROR'; connectionId: string; error: Error | PeerError<string> }
   | { type: 'CHILD_CONNECTION_DATA'; connectionId: string; data: unknown }
   | { type: 'CHILD_CALL_ACTIVE'; callId: string; remotePeerId: string; remoteStream: MediaStream }
   | { type: 'CHILD_CALL_ENDED'; callId: string }
-  | { type: 'CHILD_CALL_ERROR'; callId: string; error: PeerError<string> };
+  | { type: 'CHILD_CALL_ERROR'; callId: string; error: Error | PeerError<string> };
 
 /** Commands sent by external callers. */
 export type PeerCommand =
@@ -103,12 +103,12 @@ export type PeerEmittedEvent =
   | { type: 'peer.error'; error: PeerError<string> }
   | { type: 'connection.opened'; connectionId: string; remotePeerId: string }
   | { type: 'connection.closed'; connectionId: string }
-  | { type: 'connection.error'; connectionId: string; error: PeerError<string> }
+  | { type: 'connection.error'; connectionId: string; error: Error | PeerError<string> }
   | { type: 'connection.data'; connectionId: string; data: unknown }
   | { type: 'call.incoming'; callId: string; remotePeerId: string }
   | { type: 'call.active'; callId: string; remotePeerId: string; remoteStream: MediaStream }
   | { type: 'call.ended'; callId: string }
-  | { type: 'call.error'; callId: string; error: PeerError<string> };
+  | { type: 'call.error'; callId: string; error: Error | PeerError<string> };
 
 // ── Effects ───────────────────────────────────────────────────────────────────
 

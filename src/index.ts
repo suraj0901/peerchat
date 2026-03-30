@@ -14,5 +14,5 @@ export type {
   MediaEmittedEvent,
   MediaMode,
   PermissionState,
-  PermissionStatus,
+  MediaPermissions,
 } from './media/types';

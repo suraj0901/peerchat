@@ -3,7 +3,7 @@ import type { Unsubscribe } from './core';
 import { createPeerManager, type PeerMachine } from './peer/PeerManager';
 import type { PeerEmittedEvent, PeerCommand } from './peer/types';
 import { createMediaManager, type MediaMachine } from './media/MediaManager';
-import type { MediaEmittedEvent, MediaCommand, MediaState, MediaMode, PermissionStatus } from './media/types';
+import type { MediaEmittedEvent, MediaCommand, MediaState, MediaMode, MediaPermissions } from './media/types';
 import type { PeerState } from './peer/types';
 
 // ── Unified event map ─────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ export type PeerClientState = {
   devices: MediaDeviceInfo[];
   mediaMode: MediaMode;
   mediaError: null; // No longer tracked in context — emitted as events
-  permissions: PermissionStatus;
+  permissions: MediaPermissions;
 };
 
 export type Subscription = { unsubscribe: () => void };
@@ -105,16 +105,16 @@ export class PeerClient {
   public on<T extends keyof PeerClientEvents>(
     eventType: T,
     listener: PeerClientEvents[T],
-  ) {
+  ): Unsubscribe {
     if ((eventType as string).startsWith('media.')) {
       return this.mediaMachine.on(
         eventType as MediaEmittedEvent['type'],
-        listener as any,
+        listener as Parameters<MediaMachine['on']>[1],
       );
     }
     return this.peerMachine.on(
       eventType as PeerEmittedEvent['type'],
-      listener as any,
+      listener as Parameters<PeerMachine['on']>[1],
     );
   }
 
@@ -185,7 +185,7 @@ export class PeerClient {
     return 'user';
   }
 
-  public get permissions(): PermissionStatus {
+  public get permissions(): MediaPermissions {
     return this.mediaMachine.getState().permissions;
   }
 

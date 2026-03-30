@@ -30,3 +30,8 @@ export type EventHandler<Emitted> = (event: Emitted) => void;
 
 /** Unsubscribe handle. */
 export type Unsubscribe = { unsubscribe: () => void };
+
+/** Compile-time exhaustiveness check. Use in default branches of switch statements. */
+export function assertNever(value: never): never {
+  throw new Error(`Unexpected value: ${JSON.stringify(value)}`);
+}

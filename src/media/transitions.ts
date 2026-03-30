@@ -1,187 +1,19 @@
+import { assertNever } from '../core';
 import type {
   MediaState,
   MediaEvent,
   MediaEffect,
-  MediaEmittedEvent,
 } from './types';
 import { isPermissionDenied, toError } from './types';
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Shorthand to create an emit effect. */
-const emit = (event: MediaEmittedEvent): MediaEffect =>
-  ({ type: 'emit', event });
-
-/** Shorthand to stop tracks on a stream. */
-const stopTracks = (stream: MediaStream): MediaEffect =>
-  ({ type: 'fireAndForget', execute: () => stream.getTracks().forEach(t => t.stop()) });
-
-/** Effect: acquire a media stream (getUserMedia or getDisplayMedia). */
-function acquireStreamEffect(
-  mode: 'user' | 'screen',
-  constraints: MediaStreamConstraints,
-  screenConstraints: DisplayMediaStreamOptions,
-): MediaEffect {
-  return {
-    type: 'runAsync',
-    id: 'acquireStream',
-    execute: async (signal) => {
-      const stream =
-        mode === 'screen'
-          ? await navigator.mediaDevices.getDisplayMedia(screenConstraints)
-          : await navigator.mediaDevices.getUserMedia(constraints);
-
-      if (signal.aborted) {
-        stream.getTracks().forEach(t => t.stop());
-        throw new DOMException('Acquisition aborted', 'AbortError');
-      }
-
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      return { stream, devices };
-    },
-    onDone: (output) => {
-      const { stream, devices } = output as { stream: MediaStream; devices: MediaDeviceInfo[] };
-      return { type: 'ACQUIRE_DONE', stream, devices };
-    },
-    onError: (error) => ({ type: 'ACQUIRE_ERROR', error }),
-  };
-}
-
-/** Effect: switch a track in the active stream. */
-function switchDeviceEffect(
-  stream: MediaStream,
-  kind: 'audio' | 'video',
-  deviceId: string,
-): MediaEffect {
-  return {
-    type: 'runAsync',
-    id: 'switchDevice',
-    execute: async (signal) => {
-      const constraints: MediaStreamConstraints =
-        kind === 'audio'
-          ? { audio: { deviceId: { exact: deviceId } } }
-          : { video: { deviceId: { exact: deviceId } } };
-
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      const newTrack =
-        kind === 'audio' ? newStream.getAudioTracks()[0] : newStream.getVideoTracks()[0];
-
-      if (!newTrack) throw new Error(`No ${kind} track returned for deviceId "${deviceId}"`);
-
-      if (signal.aborted) {
-        newTrack.stop();
-        throw new DOMException('Switch aborted', 'AbortError');
-      }
-
-      const oldTracks = kind === 'audio' ? stream.getAudioTracks() : stream.getVideoTracks();
-      oldTracks.forEach(t => {
-        stream.removeTrack(t);
-        t.stop();
-      });
-      stream.addTrack(newTrack);
-
-      return { stream, kind };
-    },
-    onDone: (output) => {
-      const { stream, kind } = output as { stream: MediaStream; kind: 'audio' | 'video' };
-      return { type: 'SWITCH_DONE', stream, kind };
-    },
-    onError: (error) => ({ type: 'SWITCH_ERROR', error }),
-  };
-}
-
-/** Effect: start monitoring track ends + device changes on an active stream. */
-function startStreamMonitor(stream: MediaStream): MediaEffect {
-  return {
-    type: 'startSubscription',
-    id: 'streamMonitor',
-    subscribe: (send) => {
-      const handlers: Array<{ track: MediaStreamTrack; handler: () => void }> = [];
-
-      const watchTrack = (track: MediaStreamTrack, kind: 'audio' | 'video') => {
-        const handler = () => send({ type: 'TRACK_ENDED', kind });
-        track.addEventListener('ended', handler);
-        handlers.push({ track, handler });
-      };
-
-      stream.getAudioTracks().forEach(t => watchTrack(t, 'audio'));
-      stream.getVideoTracks().forEach(t => watchTrack(t, 'video'));
-
-      const handleDeviceChange = () => {
-        void navigator.mediaDevices.enumerateDevices().then(devices =>
-          send({ type: 'DEVICES_CHANGED', devices })
-        );
-      };
-      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-
-      return () => {
-        handlers.forEach(({ track, handler }) => track.removeEventListener('ended', handler));
-        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-      };
-    },
-  };
-}
-
-/** Effect: stop the stream monitor. */
-const stopStreamMonitor: MediaEffect = { type: 'stopSubscription', id: 'streamMonitor' };
-
-/** Effect: check permissions via the Permissions API. */
-const checkPermissionsEffect: MediaEffect = {
-  type: 'runAsync',
-  id: 'checkPermissions',
-  execute: async () => {
-    if (!navigator.permissions?.query) {
-      return { camera: 'unknown', microphone: 'unknown' };
-    }
-    const [cam, mic] = await Promise.all([
-      navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
-      navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
-    ]);
-    return {
-      camera: cam?.state ?? 'unknown',
-      microphone: mic?.state ?? 'unknown',
-    };
-  },
-  onDone: (output) => ({ type: 'PERMISSIONS_CHECKED', permissions: output as any }),
-  onError: () => ({ type: 'PERMISSIONS_CHECK_ERROR' }),
-};
-
-/** Effect: start a long-lived permission monitor. */
-const startPermissionMonitor: MediaEffect = {
-  type: 'startSubscription',
-  id: 'permissionMonitor',
-  subscribe: (send) => {
-    if (!navigator.permissions?.query) return () => {};
-
-    let camStatus: PermissionStatus | null = null;
-    let micStatus: PermissionStatus | null = null;
-
-    const requery = () => {
-      send({
-        type: 'PERMISSION_CHANGED',
-        permissions: {
-          camera: (camStatus as any)?.state ?? 'unknown',
-          microphone: (micStatus as any)?.state ?? 'unknown',
-        },
-      });
-    };
-
-    void (async () => {
-      [camStatus, micStatus] = await Promise.all([
-        navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
-        navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
-      ]) as any;
-
-      if (camStatus) (camStatus as any).onchange = requery;
-      if (micStatus) (micStatus as any).onchange = requery;
-    })();
-
-    return () => {
-      if (camStatus) (camStatus as any).onchange = null;
-      if (micStatus) (micStatus as any).onchange = null;
-    };
-  },
-};
+import {
+  emit,
+  stopTracks,
+  acquireStreamEffect,
+  switchDeviceEffect,
+  startStreamMonitor,
+  stopStreamMonitor,
+  checkPermissionsEffect,
+} from './effects';
 
 // ── Transition Function ───────────────────────────────────────────────────────
 
@@ -419,6 +251,9 @@ export function transition(state: MediaState, event: MediaEvent): [MediaState, M
       }
       return [state, []];
     }
+
+    default:
+      return assertNever(state);
   }
 }
 
@@ -426,6 +261,8 @@ export function transition(state: MediaState, event: MediaEvent): [MediaState, M
  * Returns the list of effects to execute on machine startup
  * (the permission monitor subscription).
  */
+import { startPermissionMonitor } from './effects';
+
 export function initialEffects(): MediaEffect[] {
   return [startPermissionMonitor];
 }

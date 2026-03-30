@@ -10,12 +10,16 @@ export type MediaMode = 'user' | 'screen';
 
 export type PermissionState = 'granted' | 'denied' | 'prompt' | 'unknown';
 
-export type PermissionStatus = {
+/**
+ * Named `MediaPermissions` to avoid collision with the browser's
+ * built-in `PermissionStatus` global.
+ */
+export type MediaPermissions = {
   camera: PermissionState;
   microphone: PermissionState;
 };
 
-const DEFAULT_PERMISSIONS: PermissionStatus = {
+const DEFAULT_PERMISSIONS: MediaPermissions = {
   camera: 'unknown',
   microphone: 'unknown',
 };
@@ -37,12 +41,12 @@ export type MediaState =
 
 export type MediaIdle = {
   readonly _tag: 'idle';
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 export type MediaCheckingPermissions = {
   readonly _tag: 'checkingPermissions';
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 export type MediaRequesting = {
@@ -50,7 +54,7 @@ export type MediaRequesting = {
   readonly mode: MediaMode;
   readonly constraints: MediaStreamConstraints;
   readonly screenConstraints: DisplayMediaStreamOptions;
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 export type MediaActive = {
@@ -59,7 +63,7 @@ export type MediaActive = {
   readonly devices: MediaDeviceInfo[];
   readonly mode: MediaMode;
   readonly constraints: MediaStreamConstraints;
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 export type MediaSwitching = {
@@ -70,7 +74,7 @@ export type MediaSwitching = {
   readonly constraints: MediaStreamConstraints;
   readonly kind: 'audio' | 'video';
   readonly deviceId: string;
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 export type MediaRecovering = {
@@ -78,12 +82,12 @@ export type MediaRecovering = {
   readonly oldStream: MediaStream;
   readonly mode: MediaMode;
   readonly constraints: MediaStreamConstraints;
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 export type MediaDenied = {
   readonly _tag: 'denied';
-  readonly permissions: PermissionStatus;
+  readonly permissions: MediaPermissions;
 };
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -105,9 +109,9 @@ export type MediaInternalEvent =
   | { type: 'SWITCH_ERROR'; error: unknown }
   | { type: 'TRACK_ENDED'; kind: 'audio' | 'video' }
   | { type: 'DEVICES_CHANGED'; devices: MediaDeviceInfo[] }
-  | { type: 'PERMISSIONS_CHECKED'; permissions: PermissionStatus }
+  | { type: 'PERMISSIONS_CHECKED'; permissions: MediaPermissions }
   | { type: 'PERMISSIONS_CHECK_ERROR' }
-  | { type: 'PERMISSION_CHANGED'; permissions: PermissionStatus };
+  | { type: 'PERMISSION_CHANGED'; permissions: MediaPermissions };
 
 export type MediaEvent = MediaCommand | MediaInternalEvent;
 
@@ -127,7 +131,7 @@ export type MediaEmittedEvent =
   | { type: 'media.device.switched'; kind: 'audio' | 'video'; stream: MediaStream }
   | { type: 'media.device.switch.failed'; kind: 'audio' | 'video'; error: Error }
   | { type: 'media.devices.updated'; devices: MediaDeviceInfo[] }
-  | { type: 'media.permission.status'; permissions: PermissionStatus };
+  | { type: 'media.permission.status'; permissions: MediaPermissions };
 
 // ── Effects ───────────────────────────────────────────────────────────────────
 

@@ -1,58 +1,20 @@
 import type { MediaConnection } from 'peerjs';
+import { assertNever } from '../core';
 import type {
   CallState,
   CallEvent,
   CallEffect,
-  CallParentEvent,
+  CallDirection,
 } from './types';
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const RINGING_TIMEOUT_MS = 30_000;
-const CONNECTING_TIMEOUT_MS = 30_000;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Start listening to PeerJS MediaConnection events. */
-function startCallListener(call: MediaConnection): CallEffect {
-  return {
-    type: 'startSubscription',
-    id: 'callEvents',
-    subscribe: (send) => {
-      call.on('stream', (stream: MediaStream) => send({ type: 'CALL_STREAM', stream }));
-      call.on('close', () => send({ type: 'CALL_CLOSE' }));
-      call.on('error', (error: any) => send({ type: 'CALL_ERROR', error }));
-
-      return () => {
-        // PeerJS does not support removeListener — teardown is via call.close()
-      };
-    },
-  };
-}
-
-const stopCallListener: CallEffect = { type: 'stopSubscription', id: 'callEvents' };
-
-const startRingingTimer: CallEffect = {
-  type: 'startTimer',
-  id: 'ringingTimeout',
-  delayMs: RINGING_TIMEOUT_MS,
-  event: { type: 'RINGING_TIMEOUT' },
-};
-
-const cancelRingingTimer: CallEffect = { type: 'cancelTimer', id: 'ringingTimeout' };
-
-const startConnectingTimer: CallEffect = {
-  type: 'startTimer',
-  id: 'connectingTimeout',
-  delayMs: CONNECTING_TIMEOUT_MS,
-  event: { type: 'CONNECTING_TIMEOUT' },
-};
-
-const cancelConnectingTimer: CallEffect = { type: 'cancelTimer', id: 'connectingTimeout' };
-
-/** Emit a parent event. */
-const emitParent = (event: CallParentEvent): CallEffect =>
-  ({ type: 'emit', event });
+import {
+  startCallListener,
+  stopCallListener,
+  startRingingTimer,
+  cancelRingingTimer,
+  startConnectingTimer,
+  cancelConnectingTimer,
+  emitParent,
+} from './effects';
 
 // ── Transition Function ───────────────────────────────────────────────────────
 
@@ -102,15 +64,17 @@ export function transition(state: CallState, event: CallEvent): [CallState, Call
             ],
           ];
 
-        case 'RINGING_TIMEOUT':
+        case 'RINGING_TIMEOUT': {
+          const timeoutError = new Error('Call timed out');
           return [
             { _tag: 'ended', callId: state.callId },
             [
               stopCallListener,
               { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: new Error('Call timed out') as any }),
+              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: timeoutError }),
             ],
           ];
+        }
 
         default:
           return [state, []];
@@ -159,15 +123,17 @@ export function transition(state: CallState, event: CallEvent): [CallState, Call
             ],
           ];
 
-        case 'CONNECTING_TIMEOUT':
+        case 'CONNECTING_TIMEOUT': {
+          const timeoutError = new Error('Call timed out');
           return [
-            { _tag: 'error', callId: state.callId, error: new Error('Call timed out') as any },
+            { _tag: 'error', callId: state.callId, error: timeoutError },
             [
               stopCallListener,
               { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: new Error('Call timed out') as any }),
+              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: timeoutError }),
             ],
           ];
+        }
 
         default:
           return [state, []];
@@ -214,6 +180,9 @@ export function transition(state: CallState, event: CallEvent): [CallState, Call
     case 'ended':
     case 'error':
       return [state, []];
+
+    default:
+      return assertNever(state);
   }
 }
 
