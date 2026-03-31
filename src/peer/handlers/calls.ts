@@ -28,21 +28,16 @@ function spawnCallChild(
     ? { _tag: 'ringing', call, callId, remotePeerId, direction: 'inbound' }
     : { _tag: 'connecting', call, callId, remotePeerId, direction: 'outbound' };
 
-  const child = createMachine<CallState, CallEvent, CallParentEvent>(
+  return createMachine<CallState, CallEvent, CallParentEvent>(
     callTransition,
     initialState,
     callInitialEffects(call, direction),
+    {
+      live: (s) => [{ type: 'fireAndForget', execute: () => parentSend({ type: 'CHILD_CALL_ACTIVE', callId: s.callId, remotePeerId: s.remotePeerId, remoteStream: s.remoteStream }) }],
+      ended: (s) => [{ type: 'fireAndForget', execute: () => parentSend({ type: 'CHILD_CALL_ENDED', callId: s.callId }) }],
+      error: (s) => [{ type: 'fireAndForget', execute: () => parentSend({ type: 'CHILD_CALL_ERROR', callId: s.callId, error: s.error }) }],
+    }
   );
-
-  // Route child emitted events to parent
-  child.on('CALL_ACTIVE', (e) =>
-    parentSend({ type: 'CHILD_CALL_ACTIVE', callId: e.callId, remotePeerId: e.remotePeerId, remoteStream: e.remoteStream }));
-  child.on('CALL_ENDED', (e) =>
-    parentSend({ type: 'CHILD_CALL_ENDED', callId: e.callId }));
-  child.on('CALL_ERROR_PARENT', (e) =>
-    parentSend({ type: 'CHILD_CALL_ERROR', callId: e.callId, error: e.error }));
-
-  return child;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

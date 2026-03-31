@@ -67,7 +67,7 @@ export type CallCommand =
   | { type: 'HANG_UP' };
 
 export type CallInternalEvent =
-  | { type: 'CALL_STREAM'; stream: MediaStream }
+  | { type: 'CALL_STREAM'; remoteStream: MediaStream }
   | { type: 'CALL_CLOSE' }
   | { type: 'CALL_ERROR'; error: Error | PeerError<string> }
   | { type: 'RINGING_TIMEOUT' }

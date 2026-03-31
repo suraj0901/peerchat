@@ -34,15 +34,14 @@ function spawnConnectionChild(
     connectionTransition,
     initialState,
     connectionInitialEffects(connection),
+    {
+      open: (s) => [{ type: 'fireAndForget', execute: () => parentSend({ type: 'CHILD_CONNECTION_OPENED', connectionId: s.connectionId, remotePeerId: s.remotePeerId }) }],
+      closed: (s) => [{ type: 'fireAndForget', execute: () => parentSend({ type: 'CHILD_CONNECTION_CLOSED', connectionId: s.connectionId }) }],
+      error: (s) => [{ type: 'fireAndForget', execute: () => parentSend({ type: 'CHILD_CONNECTION_ERROR', connectionId: s.connectionId, error: s.error }) }],
+    }
   );
 
-  // Route child emitted events to parent
-  child.on('CONNECTION_OPENED', (e) =>
-    parentSend({ type: 'CHILD_CONNECTION_OPENED', connectionId: e.connectionId, remotePeerId: e.remotePeerId }));
-  child.on('CONNECTION_CLOSED', (e) =>
-    parentSend({ type: 'CHILD_CONNECTION_CLOSED', connectionId: e.connectionId }));
-  child.on('CONNECTION_ERROR_PARENT', (e) =>
-    parentSend({ type: 'CHILD_CONNECTION_ERROR', connectionId: e.connectionId, error: e.error }));
+  // Route child emitted events to parent that happen within a state (not on entry)
   child.on('CONNECTION_DATA_RECEIVED', (e) =>
     parentSend({ type: 'CHILD_CONNECTION_DATA', connectionId: e.connectionId, data: e.data }));
 

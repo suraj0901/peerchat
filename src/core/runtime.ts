@@ -4,6 +4,9 @@ import type {
   StateListener,
   EventHandler,
   Unsubscribe,
+  TransitionTable,
+  TaggedState,
+  OnEnterConfig,
 } from './types';
 
 // ── Machine Instance ──────────────────────────────────────────────────────────
@@ -24,6 +27,57 @@ export interface Machine<S, E, Emitted> {
   destroy: () => void;
 }
 
+// ── Table → TransitionFn Compiler ─────────────────────────────────────────────
+
+/**
+ * Compiles a declarative transition table into a `TransitionFn`.
+ *
+ * The table is a nested object keyed by `state._tag` → `event.type`.
+ * Each entry describes the target state, how to build its data, and what
+ * effects to produce. Unmatched (state, event) pairs return `[state, []]`.
+ *
+ * Type safety is enforced at the table definition site via mapped types.
+ */
+export function createTransitionFn<
+  S extends TaggedState,
+  E extends { type: string },
+>(table: TransitionTable<S, E>): TransitionFn<S, E> {
+  return (state: S, event: E): [S, Effect<E>[]] => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stateEntries = (table as any)[state._tag];
+    if (!stateEntries) return [state, []];
+
+    const entry = stateEntries[event.type];
+    if (!entry) return [state, []];
+
+    // Compute effects (static array or factory function)
+    const effects: Effect<E>[] = !entry.effects
+      ? []
+      : typeof entry.effects === 'function'
+        ? entry.effects(state, event)
+        : [...entry.effects]; // Clone static array to prevent mutation
+
+    // Self-transition: no state change
+    if (entry.target == null) {
+      return [state, effects];
+    }
+
+    // State change: build next state from target tag + data
+    let data;
+    if (entry.data) {
+      data = entry.data(state, event);
+    } else {
+      data = { ...state, ...event };
+      // Omit control fields so they don't overwrite if not intended (though nextState overwrites _tag)
+      delete (data as any)._tag;
+      delete (data as any).type;
+    }
+    const nextState = { _tag: entry.target, ...data } as S;
+
+    return [nextState, effects];
+  };
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
@@ -33,13 +87,18 @@ export interface Machine<S, E, Emitted> {
  * The runtime is responsible for:
  *   - Calling the transition function on each event
  *   - Executing effects (promises, subscriptions, timers, emits)
+ *   - Appending entry effects when the state tag changes (`onEnter`)
  *   - Notifying state subscribers after each transition
  *   - Cleaning up on destroy
+ *
+ * **`onEnter`**: Entry effects fire automatically when `state._tag` changes.
+ * They do NOT fire for the initial state — only on transitions.
  */
-export function createMachine<S, E extends { type: string }, Emitted extends { type: string }>(
+export function createMachine<S extends TaggedState, E extends { type: string }, Emitted extends { type: string }>(
   transitionFn: TransitionFn<S, E>,
   initialState: S,
   initialEffects?: Effect<E>[],
+  onEnter?: OnEnterConfig<S, E>,
 ): Machine<S, E, Emitted> {
   let state = initialState;
   let destroyed = false;
@@ -144,8 +203,19 @@ export function createMachine<S, E extends { type: string }, Emitted extends { t
   function send(event: E): void {
     if (destroyed) return;
 
-    const [nextState, effects] = transitionFn(state, event);
+    const prevTag = state._tag;
+    const [nextState, transitionEffects] = transitionFn(state, event);
     state = nextState;
+
+    // Auto-append entry effects on state tag change
+    let allEffects = transitionEffects;
+    if (onEnter && state._tag !== prevTag) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const entryFn = (onEnter as any)[state._tag] as ((s: S) => Effect<E>[]) | undefined;
+      if (entryFn) {
+        allEffects = [...transitionEffects, ...entryFn(state)];
+      }
+    }
 
     // Notify state subscribers
     for (const listener of stateListeners) {
@@ -153,7 +223,7 @@ export function createMachine<S, E extends { type: string }, Emitted extends { t
     }
 
     // Execute effects after state is updated and subscribers notified
-    for (const effect of effects) {
+    for (const effect of allEffects) {
       executeEffect(effect);
     }
   }

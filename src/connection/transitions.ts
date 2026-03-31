@@ -1,5 +1,6 @@
 import type { DataConnection } from 'peerjs';
-import { assertNever } from '../core';
+import { createTransitionFn } from '../core';
+import type { TransitionTable } from '../core';
 import type {
   ConnectionState,
   ConnectionEvent,
@@ -11,116 +12,67 @@ import {
   cancelTimeoutTimer,
   stopConnectionListener,
   emitParent,
+  closeConnection,
+  sendData,
 } from './effects';
 
-// ── Transition Function ───────────────────────────────────────────────────────
+// ── Transition Table ──────────────────────────────────────────────────────────
 
-export function transition(state: ConnectionState, event: ConnectionEvent): [ConnectionState, ConnectionEffect[]] {
-  switch (state._tag) {
-    case 'connecting': {
-      switch (event.type) {
-        case 'CONNECTION_OPEN':
-          return [
-            { _tag: 'open', connection: state.connection, connectionId: state.connectionId, remotePeerId: state.remotePeerId },
-            [
-              cancelTimeoutTimer,
-              emitParent({ type: 'CONNECTION_OPENED', connectionId: state.connectionId, remotePeerId: state.remotePeerId }),
-            ],
-          ];
+const table: TransitionTable<ConnectionState, ConnectionEvent> = {
+  connecting: {
+    CONNECTION_OPEN: {
+      target: 'open',
+      effects: [cancelTimeoutTimer],
+    },
+    CONNECTION_CLOSE: {
+      target: 'closed',
+      data: (s) => ({ connectionId: s.connectionId }),
+      effects: [cancelTimeoutTimer, stopConnectionListener],
+    },
+    CONNECTION_ERROR: {
+      target: 'error',
+      data: (s, e) => ({ connectionId: s.connectionId, error: e.error }),
+      effects: [cancelTimeoutTimer, stopConnectionListener],
+    },
+    CONNECTION_TIMEOUT: {
+      target: 'error',
+      data: (s) => ({ connectionId: s.connectionId, error: new Error('Connection timed out') }),
+      effects: (s) => [stopConnectionListener, closeConnection(s.connection)],
+    },
+  },
 
-        case 'CONNECTION_CLOSE':
-          return [
-            { _tag: 'closed', connectionId: state.connectionId },
-            [
-              cancelTimeoutTimer,
-              stopConnectionListener,
-              emitParent({ type: 'CONNECTION_CLOSED', connectionId: state.connectionId }),
-            ],
-          ];
+  open: {
+    SEND: {
+      effects: (s, e) => [sendData(s.connection, e.data)],
+    },
+    CLOSE: {
+      target: 'closed',
+      data: (s) => ({ connectionId: s.connectionId }),
+      effects: (s) => [stopConnectionListener, closeConnection(s.connection)],
+    },
+    CONNECTION_DATA: {
+      effects: (s, e) => [emitParent({ type: 'CONNECTION_DATA_RECEIVED', connectionId: s.connectionId, data: e.data })],
+    },
+    CONNECTION_CLOSE: {
+      target: 'closed',
+      data: (s) => ({ connectionId: s.connectionId }),
+      effects: [stopConnectionListener],
+    },
+    CONNECTION_ERROR: {
+      target: 'error',
+      data: (s, e) => ({ connectionId: s.connectionId, error: e.error }),
+      effects: [stopConnectionListener],
+    },
+  },
 
-        case 'CONNECTION_ERROR':
-          return [
-            { _tag: 'error', connectionId: state.connectionId, error: event.error },
-            [
-              cancelTimeoutTimer,
-              stopConnectionListener,
-              emitParent({ type: 'CONNECTION_ERROR_PARENT', connectionId: state.connectionId, error: event.error }),
-            ],
-          ];
+  // Terminal states — no transitions
+  closed: {},
+  error: {},
+};
 
-        case 'CONNECTION_TIMEOUT': {
-          const timeoutError = new Error('Connection timed out');
-          return [
-            { _tag: 'error', connectionId: state.connectionId, error: timeoutError },
-            [
-              stopConnectionListener,
-              { type: 'fireAndForget', execute: () => state.connection.close() },
-              emitParent({ type: 'CONNECTION_ERROR_PARENT', connectionId: state.connectionId, error: timeoutError }),
-            ],
-          ];
-        }
+// ── Compiled Transition Function ──────────────────────────────────────────────
 
-        default:
-          return [state, []];
-      }
-    }
-
-    case 'open': {
-      switch (event.type) {
-        case 'SEND':
-          return [
-            state,
-            [{ type: 'fireAndForget', execute: () => state.connection.send(event.data) }],
-          ];
-
-        case 'CLOSE':
-          return [
-            { _tag: 'closed', connectionId: state.connectionId },
-            [
-              stopConnectionListener,
-              { type: 'fireAndForget', execute: () => state.connection.close() },
-              emitParent({ type: 'CONNECTION_CLOSED', connectionId: state.connectionId }),
-            ],
-          ];
-
-        case 'CONNECTION_DATA':
-          return [
-            state,
-            [emitParent({ type: 'CONNECTION_DATA_RECEIVED', connectionId: state.connectionId, data: event.data })],
-          ];
-
-        case 'CONNECTION_CLOSE':
-          return [
-            { _tag: 'closed', connectionId: state.connectionId },
-            [
-              stopConnectionListener,
-              emitParent({ type: 'CONNECTION_CLOSED', connectionId: state.connectionId }),
-            ],
-          ];
-
-        case 'CONNECTION_ERROR':
-          return [
-            { _tag: 'error', connectionId: state.connectionId, error: event.error },
-            [
-              stopConnectionListener,
-              emitParent({ type: 'CONNECTION_ERROR_PARENT', connectionId: state.connectionId, error: event.error }),
-            ],
-          ];
-
-        default:
-          return [state, []];
-      }
-    }
-
-    // Terminal states — no transitions
-    case 'closed':
-    case 'error':
-      return [state, []];
-
-    default:
-      return assertNever(state);
-  }
-}
+export const transition = createTransitionFn<ConnectionState, ConnectionEvent>(table);
 
 /**
  * Returns the initial effects to run when a connection machine starts.

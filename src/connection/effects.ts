@@ -49,3 +49,17 @@ export const cancelTimeoutTimer: ConnectionEffect = {
 /** Emit a parent event (the peer machine picks these up). */
 export const emitParent = (event: ConnectionParentEvent): ConnectionEffect =>
   ({ type: 'emit', event });
+
+// ── Connection Actions ────────────────────────────────────────────────────────
+
+/** Close a data connection. */
+export const closeConnection = (connection: DataConnection): ConnectionEffect => ({
+  type: 'fireAndForget',
+  execute: () => connection.close(),
+});
+
+/** Send data over a data connection. */
+export const sendData = (connection: DataConnection, data: unknown): ConnectionEffect => ({
+  type: 'fireAndForget',
+  execute: () => connection.send(data),
+});

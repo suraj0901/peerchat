@@ -1,5 +1,5 @@
 import type { MediaConnection } from 'peerjs';
-import type { CallEffect, CallParentEvent } from './types';
+import type { CallEffect } from './types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -14,12 +14,16 @@ export function startCallListener(call: MediaConnection): CallEffect {
     type: 'startSubscription',
     id: 'callEvents',
     subscribe: (send) => {
-      call.on('stream', (stream: MediaStream) => send({ type: 'CALL_STREAM', stream }));
+      call.on('stream', (stream) => {
+        send({ type: 'CALL_STREAM', remoteStream: stream });
+      });
       call.on('close', () => send({ type: 'CALL_CLOSE' }));
       call.on('error', (error) => send({ type: 'CALL_ERROR', error }));
 
       return () => {
-        // PeerJS does not support removeListener — teardown is via call.close()
+        call.off('stream');
+        call.off('close');
+        call.off('error');
       };
     },
   };
@@ -56,8 +60,17 @@ export const cancelConnectingTimer: CallEffect = {
   id: 'connectingTimeout',
 };
 
-// ── Emit ──────────────────────────────────────────────────────────────────────
+// ── Call Actions ──────────────────────────────────────────────────────────────
 
-/** Emit a parent event. */
-export const emitParent = (event: CallParentEvent): CallEffect =>
-  ({ type: 'emit', event });
+/** Answer an incoming call with the local media stream. */
+export const answerCall = (call: MediaConnection, localStream: MediaStream): CallEffect => ({
+  type: 'fireAndForget',
+  execute: () => call.answer(localStream),
+});
+
+/** Close (hang up) a media connection. */
+export const closeCall = (call: MediaConnection): CallEffect => ({
+  type: 'fireAndForget',
+  execute: () => call.close(),
+});
+

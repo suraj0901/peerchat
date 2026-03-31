@@ -1,10 +1,10 @@
 import type { MediaConnection } from 'peerjs';
-import { assertNever } from '../core';
+import { createTransitionFn } from '../core';
+import type { TransitionTable } from '../core';
 import type {
   CallState,
   CallEvent,
   CallEffect,
-  CallDirection,
 } from './types';
 import {
   startCallListener,
@@ -13,178 +13,86 @@ import {
   cancelRingingTimer,
   startConnectingTimer,
   cancelConnectingTimer,
-  emitParent,
+  answerCall,
+  closeCall,
 } from './effects';
 
-// ── Transition Function ───────────────────────────────────────────────────────
+// ── Transition Table ──────────────────────────────────────────────────────────
 
-export function transition(state: CallState, event: CallEvent): [CallState, CallEffect[]] {
-  switch (state._tag) {
-    case 'ringing': {
-      switch (event.type) {
-        case 'ANSWER':
-          return [
-            { _tag: 'connecting', call: state.call, callId: state.callId, remotePeerId: state.remotePeerId, direction: state.direction },
-            [
-              cancelRingingTimer,
-              startConnectingTimer,
-              { type: 'fireAndForget', execute: () => state.call.answer(event.localStream) },
-            ],
-          ];
+const table: TransitionTable<CallState, CallEvent> = {
+  ringing: {
+    ANSWER: {
+      target: 'connecting',
+      effects: (s, e) => [cancelRingingTimer, startConnectingTimer, answerCall(s.call, e.localStream)],
+    },
+    REJECT: {
+      target: 'ended',
+      effects: (s) => [cancelRingingTimer, stopCallListener, closeCall(s.call)],
+    },
+    CALL_CLOSE: {
+      target: 'ended',
+      effects: [cancelRingingTimer, stopCallListener],
+    },
+    CALL_ERROR: {
+      target: 'error',
+      effects: [cancelRingingTimer, stopCallListener],
+    },
+    RINGING_TIMEOUT: {
+      target: 'error',
+      data: (s) => ({ callId: s.callId, error: new Error('Call ringing timed out') }),
+      effects: (s) => [stopCallListener, closeCall(s.call)],
+    },
+  },
 
-        case 'REJECT':
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              cancelRingingTimer,
-              stopCallListener,
-              { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ENDED', callId: state.callId }),
-            ],
-          ];
+  connecting: {
+    CALL_STREAM: {
+      target: 'live',
+      effects: [cancelConnectingTimer],
+    },
+    HANG_UP: {
+      target: 'ended',
+      effects: (s) => [cancelConnectingTimer, stopCallListener, closeCall(s.call)],
+    },
+    CALL_CLOSE: {
+      target: 'ended',
+      effects: [cancelConnectingTimer, stopCallListener],
+    },
+    CALL_ERROR: {
+      target: 'error',
+      effects: [cancelConnectingTimer, stopCallListener],
+    },
+    CONNECTING_TIMEOUT: {
+      target: 'error',
+      data: (s) => ({ callId: s.callId, error: new Error('Call connecting timed out') }),
+      effects: (s) => [stopCallListener, closeCall(s.call)],
+    },
+  },
 
-        case 'CALL_CLOSE':
-          // Caller hung up before we answered
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              cancelRingingTimer,
-              stopCallListener,
-              emitParent({ type: 'CALL_ENDED', callId: state.callId }),
-            ],
-          ];
+  live: {
+    HANG_UP: {
+      target: 'ended',
+      effects: (s) => [stopCallListener, closeCall(s.call)],
+    },
+    CALL_CLOSE: {
+      target: 'ended',
+      effects: [stopCallListener],
+    },
+    CALL_ERROR: {
+      target: 'error',
+      effects: [stopCallListener],
+    },
+  },
 
-        case 'CALL_ERROR':
-          return [
-            { _tag: 'error', callId: state.callId, error: event.error },
-            [
-              cancelRingingTimer,
-              stopCallListener,
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: event.error }),
-            ],
-          ];
+  // Terminal states — no outgoing transitions
+  ended: {},
+  error: {},
+};
 
-        case 'RINGING_TIMEOUT': {
-          const timeoutError = new Error('Call timed out');
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              stopCallListener,
-              { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: timeoutError }),
-            ],
-          ];
-        }
+// ── Compiled Transition Function ──────────────────────────────────────────────
 
-        default:
-          return [state, []];
-      }
-    }
+export const transition = createTransitionFn<CallState, CallEvent>(table);
 
-    case 'connecting': {
-      switch (event.type) {
-        case 'CALL_STREAM':
-          return [
-            { _tag: 'live', call: state.call, callId: state.callId, remotePeerId: state.remotePeerId, direction: state.direction, remoteStream: event.stream },
-            [
-              cancelConnectingTimer,
-              emitParent({ type: 'CALL_ACTIVE', callId: state.callId, remotePeerId: state.remotePeerId, remoteStream: event.stream }),
-            ],
-          ];
-
-        case 'HANG_UP':
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              cancelConnectingTimer,
-              stopCallListener,
-              { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ENDED', callId: state.callId }),
-            ],
-          ];
-
-        case 'CALL_CLOSE':
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              cancelConnectingTimer,
-              stopCallListener,
-              emitParent({ type: 'CALL_ENDED', callId: state.callId }),
-            ],
-          ];
-
-        case 'CALL_ERROR':
-          return [
-            { _tag: 'error', callId: state.callId, error: event.error },
-            [
-              cancelConnectingTimer,
-              stopCallListener,
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: event.error }),
-            ],
-          ];
-
-        case 'CONNECTING_TIMEOUT': {
-          const timeoutError = new Error('Call timed out');
-          return [
-            { _tag: 'error', callId: state.callId, error: timeoutError },
-            [
-              stopCallListener,
-              { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: timeoutError }),
-            ],
-          ];
-        }
-
-        default:
-          return [state, []];
-      }
-    }
-
-    case 'live': {
-      switch (event.type) {
-        case 'HANG_UP':
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              stopCallListener,
-              { type: 'fireAndForget', execute: () => state.call.close() },
-              emitParent({ type: 'CALL_ENDED', callId: state.callId }),
-            ],
-          ];
-
-        case 'CALL_CLOSE':
-          // Remote peer hung up
-          return [
-            { _tag: 'ended', callId: state.callId },
-            [
-              stopCallListener,
-              emitParent({ type: 'CALL_ENDED', callId: state.callId }),
-            ],
-          ];
-
-        case 'CALL_ERROR':
-          return [
-            { _tag: 'error', callId: state.callId, error: event.error },
-            [
-              stopCallListener,
-              emitParent({ type: 'CALL_ERROR_PARENT', callId: state.callId, error: event.error }),
-            ],
-          ];
-
-        default:
-          return [state, []];
-      }
-    }
-
-    // Terminal states — no transitions
-    case 'ended':
-    case 'error':
-      return [state, []];
-
-    default:
-      return assertNever(state);
-  }
-}
+// ── Initial Effects ───────────────────────────────────────────────────────────
 
 /**
  * Returns initial effects for a new call machine.
