@@ -12,3 +12,5 @@ export type {
   TaggedState,
   OnEnterConfig,
 } from './types';
+
+export * from './machine';

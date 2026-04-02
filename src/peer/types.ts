@@ -1,22 +1,18 @@
 import type { Peer, PeerError, DataConnection, MediaConnection } from 'peerjs';
 import type { Effect } from '../core/types';
 import type { Machine } from '../core/runtime';
-import type { ConnectionState, ConnectionEvent, ConnectionParentEvent } from '../connection/types';
-import type { CallState, CallEvent, CallParentEvent } from '../call/types';
+import type { ConnectionMachine } from '../connection/ConnectionMachine';
+import type { CallMachine } from '../call/CallMachine';
 
-// ── Child Machine Types ───────────────────────────────────────────────────────
+// ── Shared Types ──────────────────────────────────────────────────────────────
 
-export type ConnectionChild = Machine<ConnectionState, ConnectionEvent, ConnectionParentEvent>;
-export type CallChild = Machine<CallState, CallEvent, CallParentEvent>;
+export type PeerInput = {
+  peer: Peer;
+  maxRetries?: number;
+  baseRetryDelay?: number;
+};
 
-// ── Peer State (Discriminated Union) ──────────────────────────────────────────
-
-export type PeerState =
-  | PeerInitializing
-  | PeerReady
-  | PeerDisconnected
-  | PeerErrorState
-  | PeerDestroyed;
+// ── Peer State Configurations ─────────────────────────────────────────────────
 
 export type PeerInitializing = {
   readonly _tag: 'initializing';
@@ -25,16 +21,12 @@ export type PeerInitializing = {
   readonly baseRetryDelay: number;
 };
 
-/**
- * `peerId` is `string` — not `string | null`.
- * It only exists in states where it's been assigned.
- */
 export type PeerReady = {
   readonly _tag: 'ready';
   readonly peer: Peer;
   readonly peerId: string;
-  readonly connections: Map<string, ConnectionChild>;
-  readonly calls: Map<string, CallChild>;
+  readonly connections: Map<string, ConnectionMachine>;
+  readonly calls: Map<string, CallMachine>;
   readonly maxRetries: number;
   readonly baseRetryDelay: number;
 };
@@ -43,8 +35,8 @@ export type PeerDisconnected = {
   readonly _tag: 'disconnected';
   readonly peer: Peer;
   readonly peerId: string;
-  readonly connections: Map<string, ConnectionChild>;
-  readonly calls: Map<string, CallChild>;
+  readonly connections: Map<string, ConnectionMachine>;
+  readonly calls: Map<string, CallMachine>;
   readonly retryCount: number;
   readonly maxRetries: number;
   readonly baseRetryDelay: number;
@@ -59,41 +51,34 @@ export type PeerDestroyed = {
   readonly _tag: 'destroyed';
 };
 
-// ── Events ────────────────────────────────────────────────────────────────────
+export type PeerState =
+  | PeerInitializing
+  | PeerReady
+  | PeerDisconnected
+  | PeerErrorState
+  | PeerDestroyed;
 
-/** Internal events from PeerJS. */
-export type PeerCallbackEvent =
+// ── Peer Events ───────────────────────────────────────────────────────────────
+
+export type PeerEvent =
   | { type: 'PEER_OPEN'; id: string }
   | { type: 'PEER_CONNECTION'; connection: DataConnection }
   | { type: 'PEER_CALL'; call: MediaConnection }
   | { type: 'PEER_DISCONNECTED' }
   | { type: 'PEER_ERROR'; error: PeerError<string> }
   | { type: 'PEER_CLOSE' }
-  | { type: 'RECONNECT_TIMER_FIRED' };
+  | PeerCommand;
 
-/** Child machine events bubbled up to the peer machine. */
-export type ChildEvent =
-  | { type: 'CHILD_CONNECTION_OPENED'; connectionId: string; remotePeerId: string }
-  | { type: 'CHILD_CONNECTION_CLOSED'; connectionId: string }
-  | { type: 'CHILD_CONNECTION_ERROR'; connectionId: string; error: Error | PeerError<string> }
-  | { type: 'CHILD_CONNECTION_DATA'; connectionId: string; data: unknown }
-  | { type: 'CHILD_CALL_ACTIVE'; callId: string; remotePeerId: string; remoteStream: MediaStream }
-  | { type: 'CHILD_CALL_ENDED'; callId: string }
-  | { type: 'CHILD_CALL_ERROR'; callId: string; error: Error | PeerError<string> };
-
-/** Commands sent by external callers. */
 export type PeerCommand =
+  | { type: 'RECONNECT' }
+  | { type: 'DESTROY' }
   | { type: 'CONNECT_TO'; remotePeerId: string }
-  | { type: 'SEND'; connectionId: string; data: unknown }
-  | { type: 'CLOSE_CONNECTION'; connectionId: string }
   | { type: 'CALL'; remotePeerId: string; localStream: MediaStream }
   | { type: 'ANSWER_CALL'; callId: string; localStream: MediaStream }
   | { type: 'REJECT_CALL'; callId: string }
   | { type: 'HANG_UP'; callId: string }
-  | { type: 'RECONNECT' }
-  | { type: 'DESTROY' };
-
-export type PeerEvent = PeerCallbackEvent | ChildEvent | PeerCommand;
+  | { type: 'SEND'; connectionId: string; data: unknown }
+  | { type: 'CLOSE_CONNECTION'; connectionId: string };
 
 // ── Emitted Events ────────────────────────────────────────────────────────────
 
@@ -110,13 +95,9 @@ export type PeerEmittedEvent =
   | { type: 'call.ended'; callId: string }
   | { type: 'call.error'; callId: string; error: Error | PeerError<string> };
 
-// ── Effects ───────────────────────────────────────────────────────────────────
+// ── Error Helpers ─────────────────────────────────────────────────────────────
 
-export type PeerEffect = Effect<PeerEvent>;
-
-// ── Fatal Errors ──────────────────────────────────────────────────────────────
-
-export const FATAL_PEER_ERROR_TYPES = [
+export const FATAL_ERRORS = new Set([
   'browser-incompatible',
   'invalid-id',
   'invalid-key',
@@ -124,18 +105,8 @@ export const FATAL_PEER_ERROR_TYPES = [
   'server-error',
   'socket-error',
   'socket-closed',
-  'unavailable-id',
-] as const;
+]);
 
-export type FatalPeerErrorType = (typeof FATAL_PEER_ERROR_TYPES)[number];
-
-export const isFatalError = (error: PeerError<string>): boolean =>
-  (FATAL_PEER_ERROR_TYPES as ReadonlyArray<string>).includes(error.type);
-
-// ── Input ─────────────────────────────────────────────────────────────────────
-
-export type PeerInput = {
-  peer: Peer;
-  maxRetries?: number;
-  baseRetryDelay?: number;
-};
+export function isFatalError(error: PeerError<string>): boolean {
+  return FATAL_ERRORS.has(error.type);
+}

@@ -1,7 +1,7 @@
 import type { Peer, PeerError } from 'peerjs';
 import type { Unsubscribe } from './core';
-import { createPeerManager, type PeerMachine } from './peer/PeerManager';
-import type { PeerEmittedEvent, PeerCommand } from './peer/types';
+import { PeerManager } from './peer/PeerManager';
+import type { PeerEmittedEvent } from './peer/types';
 import { createMediaManager, type MediaMachine } from './media/MediaManager';
 import type { MediaEmittedEvent, MediaCommand, MediaState, MediaMode, MediaPermissions } from './media/types';
 import type { PeerState } from './peer/types';
@@ -91,12 +91,12 @@ function deriveState(peerState: PeerState, mediaState: MediaState): PeerClientSt
  */
 export class PeerClient {
   private peer: Peer;
-  private peerMachine: PeerMachine;
+  private peerMachine: PeerManager;
   private mediaMachine: MediaMachine;
 
   constructor(peer: Peer) {
     this.peer = peer;
-    this.peerMachine = createPeerManager({ peer });
+    this.peerMachine = new PeerManager({ peer });
     this.mediaMachine = createMediaManager();
   }
 
@@ -114,7 +114,7 @@ export class PeerClient {
     }
     return this.peerMachine.on(
       eventType as PeerEmittedEvent['type'],
-      listener as Parameters<PeerMachine['on']>[1],
+      listener as any,
     );
   }
 
@@ -145,6 +145,38 @@ export class PeerClient {
         mediaSub.unsubscribe();
       },
     };
+  }
+
+  // ── Accessors (OOP Class Pattern) ──────────────────────────────────────────
+
+  /**
+   * Provides direct access to the connection instances for type-safe method invocation.
+   * `if (conn instanceof ConnectionOpenState) conn.send(data)`
+   */
+  public get connections(): Map<string, import('./connection/state').ConnectionState> {
+    const state = this.peerMachine.getState();
+    const result = new Map<string, import('./connection/state').ConnectionState>();
+    if (state._tag === 'ready' || state._tag === 'disconnected') {
+      state.connections.forEach((machine, id) => {
+        result.set(id, machine.getState());
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Provides direct access to the call instances for type-safe method invocation.
+   * `if (call instanceof CallRingingState) call.answer(stream)`
+   */
+  public get calls(): Map<string, import('./call/state').CallState> {
+    const state = this.peerMachine.getState();
+    const result = new Map<string, import('./call/state').CallState>();
+    if (state._tag === 'ready' || state._tag === 'disconnected') {
+      state.calls.forEach((machine, id) => {
+        result.set(id, machine.getState());
+      });
+    }
+    return result;
   }
 
   // ── Peer state ──────────────────────────────────────────────────────────────
@@ -209,11 +241,7 @@ export class PeerClient {
     this.mediaMachine.send({ type: 'STOP' });
   }
 
-  // ── Peer commands ───────────────────────────────────────────────────────────
 
-  private send(event: PeerCommand) {
-    this.peerMachine.send(event);
-  }
 
   /**
    * Ensures a local MediaStream is available before executing a callback.
@@ -255,15 +283,24 @@ export class PeerClient {
   // ── Data connections ────────────────────────────────────────────────────────
 
   public connect(remotePeerId: string) {
-    this.send({ type: 'CONNECT_TO', remotePeerId });
+    this.peerMachine.connect(remotePeerId);
   }
 
+  /**
+   * @deprecated Use `client.connections.get(id)?.send(data)` instead.
+   */
   public sendData(connectionId: string, data: unknown) {
-    this.send({ type: 'SEND', connectionId, data });
+    const conn = this.connections.get(connectionId);
+    if (conn && conn._tag === 'open') conn.send(data);
   }
 
+  /**
+   * @deprecated Use `client.connections.get(id)?.close()` instead.
+   */
   public closeConnection(connectionId: string) {
-    this.send({ type: 'CLOSE_CONNECTION', connectionId });
+    const conn = this.connections.get(connectionId);
+    if (conn && conn._tag === 'open') conn.close();
+    else if (conn) conn.destroy();
   }
 
   // ── Media calls ─────────────────────────────────────────────────────────────
@@ -273,10 +310,13 @@ export class PeerClient {
     constraints: MediaStreamConstraints = { audio: true, video: true },
   ) {
     this.withMedia(constraints, (stream) => {
-      this.send({ type: 'CALL', remotePeerId, localStream: stream });
+      this.peerMachine.call(remotePeerId, stream);
     });
   }
 
+  /**
+   * @deprecated Use `client.calls.get(id)?.answer(stream)` instead.
+   */
   public answerCall(
     callId: string,
     constraints: MediaStreamConstraints = { audio: true, video: true },
@@ -284,20 +324,32 @@ export class PeerClient {
     this.withMedia(
       constraints,
       (stream) => {
-        this.send({ type: 'ANSWER_CALL', callId, localStream: stream });
+        const call = this.calls.get(callId);
+        if (call && call._tag === 'ringing') call.answer(stream);
       },
       () => {
-        this.send({ type: 'REJECT_CALL', callId });
+        const call = this.calls.get(callId);
+        if (call && call._tag === 'ringing') call.reject();
       },
     );
   }
 
+  /**
+   * @deprecated Use `client.calls.get(id)?.reject()` instead.
+   */
   public rejectCall(callId: string) {
-    this.send({ type: 'REJECT_CALL', callId });
+    const call = this.calls.get(callId);
+    if (call && call._tag === 'ringing') call.reject();
   }
 
+  /**
+   * @deprecated Use `client.calls.get(id)?.hangUp()` instead.
+   */
   public hangUp(callId: string) {
-    this.send({ type: 'HANG_UP', callId });
+    const call = this.calls.get(callId);
+    if (call && (call._tag === 'live' || call._tag === 'connecting')) {
+       call.hangUp();
+    }
   }
 
   public retryMedia() {
@@ -323,11 +375,11 @@ export class PeerClient {
   // ── Peer lifecycle ──────────────────────────────────────────────────────────
 
   public reconnect() {
-    this.send({ type: 'RECONNECT' });
+    this.peerMachine.reconnect();
   }
 
   public destroy() {
-    this.send({ type: 'DESTROY' });
+    this.peerMachine.destroy();
     this.mediaMachine.send({ type: 'STOP' });
     this.mediaMachine.destroy();
   }
