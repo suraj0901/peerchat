@@ -4,11 +4,7 @@ import type { MachineContext } from '../core';
 
 export type CallDirection = 'inbound' | 'outbound';
 
-export interface CallContext extends MachineContext<CallState> {
-  emitCallActive: (callId: string, remotePeerId: string, stream: MediaStream) => void;
-  emitCallEnded: (callId: string) => void;
-  emitCallError: (callId: string, error: Error | PeerError<string>) => void;
-}
+export type CallContext = MachineContext<CallState>;
 
 export interface BaseCallState {
   readonly _tag: 'ringing' | 'connecting' | 'live' | 'ended' | 'error';
@@ -36,28 +32,24 @@ export class CallRingingState implements BaseCallState {
     this.call.on('error', this.onError);
   }
 
-  public answer(localStream: MediaStream): CallConnectingState {
+  public answer(localStream: MediaStream): void {
     this.destroy();
     this.call.answer(localStream);
     const next = new CallConnectingState(this.call, this.callId, this.remotePeerId, 'inbound', this.ctx);
-    this.ctx.transition(next, this, 'ANSWER');
-    return next;
+    this.ctx.transition(next);
   }
 
-  public reject(): CallEndedState {
+  public reject(): void {
     this.destroy();
     this.call.close();
-    const next = new CallEndedState(this.callId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'REJECT');
-    this.ctx.emitCallEnded(this.callId);
-    return next;
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
   }
 
   private onClose = () => {
     this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CALL_CLOSE');
-    this.ctx.emitCallEnded(this.callId);
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
   };
 
   private onError = (error: any) => {
@@ -71,9 +63,8 @@ export class CallRingingState implements BaseCallState {
   private handleFatalError(error: Error | PeerError<string>) {
     this.destroy();
     this.call.close();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error, this.ctx);
-    this.ctx.transition(next, this, 'CALL_ERROR');
-    this.ctx.emitCallError(this.callId, error);
+    const next = new CallErrorState(this.callId, this.remotePeerId, error);
+    this.ctx.transition(next);
   }
 
   public destroy() {
@@ -100,27 +91,23 @@ export class CallConnectingState implements BaseCallState {
     this.call.on('error', this.onError);
   }
 
-  public hangUp(): CallEndedState {
+  public hangUp() {
     this.destroy();
     this.call.close();
-    const next = new CallEndedState(this.callId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'HANG_UP');
-    this.ctx.emitCallEnded(this.callId);
-    return next;
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
   }
 
   private onStream = (stream: MediaStream) => {
     this.destroy();
     const next = new CallLiveState(this.call, this.callId, this.remotePeerId, this.direction, stream, this.ctx);
-    this.ctx.transition(next, this, 'CALL_STREAM');
-    this.ctx.emitCallActive(this.callId, this.remotePeerId, stream);
+    this.ctx.transition(next);
   };
 
   private onClose = () => {
     this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CALL_CLOSE');
-    this.ctx.emitCallEnded(this.callId);
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
   };
 
   private onError = (error: any) => {
@@ -134,9 +121,8 @@ export class CallConnectingState implements BaseCallState {
   private handleFatalError(error: Error | PeerError<string>) {
     this.destroy();
     this.call.close();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error, this.ctx);
-    this.ctx.transition(next, this, 'CALL_ERROR');
-    this.ctx.emitCallError(this.callId, error);
+    const next = new CallErrorState(this.callId, this.remotePeerId, error);
+    this.ctx.transition(next);
   }
 
   public destroy() {
@@ -165,24 +151,21 @@ export class CallLiveState implements BaseCallState {
   public hangUp(): CallEndedState {
     this.destroy();
     this.call.close();
-    const next = new CallEndedState(this.callId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'HANG_UP');
-    this.ctx.emitCallEnded(this.callId);
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
     return next;
   }
 
   private onClose = () => {
     this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CALL_CLOSE');
-    this.ctx.emitCallEnded(this.callId);
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
   };
 
   private onError = (error: any) => {
     this.destroy();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error, this.ctx);
-    this.ctx.transition(next, this, 'CALL_ERROR');
-    this.ctx.emitCallError(this.callId, error);
+    const next = new CallErrorState(this.callId, this.remotePeerId, error);
+    this.ctx.transition(next);
   };
 
   public destroy() {
@@ -196,7 +179,6 @@ export class CallEndedState implements BaseCallState {
   constructor(
     public readonly callId: string,
     public readonly remotePeerId: string,
-    private ctx: CallContext
   ) { }
   public destroy() { }
 }
@@ -207,7 +189,6 @@ export class CallErrorState implements BaseCallState {
     public readonly callId: string,
     public readonly remotePeerId: string,
     public readonly error: Error | PeerError<string>,
-    private ctx: CallContext
   ) { }
   public destroy() { }
 }

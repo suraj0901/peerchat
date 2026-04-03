@@ -2,10 +2,7 @@ import type { DataConnection, PeerError } from 'peerjs';
 import type { MachineContext } from '../core';
 
 export interface ConnectionContext extends MachineContext<ConnectionState> {
-  emitConnectionOpened: (connectionId: string, remotePeerId: string) => void;
-  emitConnectionClosed: (connectionId: string) => void;
-  emitConnectionError: (connectionId: string, error: Error | PeerError<string>) => void;
-  emitConnectionData: (connectionId: string, data: unknown) => void;
+  emitData: (connectionId: string, data: unknown) => void;
 }
 
 export interface BaseConnectionState {
@@ -36,15 +33,13 @@ export class ConnectionConnectingState implements BaseConnectionState {
   private onOpen = () => {
     this.destroy();
     const next = new ConnectionOpenState(this.connection, this.connectionId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CONNECTION_OPEN');
-    this.ctx.emitConnectionOpened(this.connectionId, this.remotePeerId);
+    this.ctx.transition(next);
   };
 
   private onClose = () => {
     this.destroy();
-    const next = new ConnectionClosedState(this.connectionId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CONNECTION_CLOSE');
-    this.ctx.emitConnectionClosed(this.connectionId);
+    const next = new ConnectionClosedState(this.connectionId, this.remotePeerId);
+    this.ctx.transition(next);
   };
 
   private onError = (error: any) => {
@@ -58,9 +53,8 @@ export class ConnectionConnectingState implements BaseConnectionState {
   private handleFatalError(error: Error | PeerError<string>) {
     this.destroy();
     this.connection.close();
-    const next = new ConnectionErrorState(this.connectionId, this.remotePeerId, error, this.ctx);
-    this.ctx.transition(next, this, 'CONNECTION_ERROR');
-    this.ctx.emitConnectionError(this.connectionId, error);
+    const next = new ConnectionErrorState(this.connectionId, this.remotePeerId, error);
+    this.ctx.transition(next);
   }
 
   public destroy() {
@@ -92,28 +86,25 @@ export class ConnectionOpenState implements BaseConnectionState {
   public close(): ConnectionClosedState {
     this.destroy();
     this.connection.close();
-    const next = new ConnectionClosedState(this.connectionId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CLOSE');
-    this.ctx.emitConnectionClosed(this.connectionId);
+    const next = new ConnectionClosedState(this.connectionId, this.remotePeerId);
+    this.ctx.transition(next);
     return next;
   }
 
   private onData = (data: unknown) => {
-    this.ctx.emitConnectionData(this.connectionId, data);
+    this.ctx.emitData(this.connectionId, data);
   };
 
   private onClose = () => {
     this.destroy();
-    const next = new ConnectionClosedState(this.connectionId, this.remotePeerId, this.ctx);
-    this.ctx.transition(next, this, 'CONNECTION_CLOSE');
-    this.ctx.emitConnectionClosed(this.connectionId);
+    const next = new ConnectionClosedState(this.connectionId, this.remotePeerId);
+    this.ctx.transition(next);
   };
 
   private onError = (error: any) => {
     this.destroy();
-    const next = new ConnectionErrorState(this.connectionId, this.remotePeerId, error, this.ctx);
-    this.ctx.transition(next, this, 'CONNECTION_ERROR');
-    this.ctx.emitConnectionError(this.connectionId, error);
+    const next = new ConnectionErrorState(this.connectionId, this.remotePeerId, error);
+    this.ctx.transition(next);
   };
 
   public destroy() {
@@ -128,7 +119,6 @@ export class ConnectionClosedState implements BaseConnectionState {
   constructor(
     public readonly connectionId: string,
     public readonly remotePeerId: string,
-    private ctx: ConnectionContext
   ) {}
   public destroy() {}
 }
@@ -139,7 +129,6 @@ export class ConnectionErrorState implements BaseConnectionState {
     public readonly connectionId: string,
     public readonly remotePeerId: string,
     public readonly error: Error | PeerError<string>,
-    private ctx: ConnectionContext
   ) {}
   public destroy() {}
 }

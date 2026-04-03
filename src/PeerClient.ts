@@ -2,9 +2,10 @@ import type { Peer, PeerError } from 'peerjs';
 import type { Unsubscribe } from './core';
 import { PeerManager } from './peer/PeerManager';
 import type { PeerEmittedEvent } from './peer/types';
-import { createMediaManager, type MediaMachine } from './media/MediaManager';
-import type { MediaEmittedEvent, MediaCommand, MediaState, MediaMode, MediaPermissions } from './media/types';
-import type { PeerState } from './peer/types';
+import type { PeerState } from './peer/state';
+import { MediaMachine } from './media/MediaManager';
+import type { MediaEmittedEvent } from './media/types';
+import type { MediaState, MediaMode, MediaPermissions } from './media/state';
 
 // ── Unified event map ─────────────────────────────────────────────────────────
 
@@ -18,24 +19,15 @@ type PeerClientEvents = {
 
 // ── Reactive state snapshot ───────────────────────────────────────────────────
 
-/**
- * Flat projection of both the peer and media machine states.
- * Subscribers receive a new object on every state change from either machine.
- *
- * Now backed by discriminated unions internally — state-specific data is
- * only available when the state tag matches.
- */
 export type PeerClientState = {
-  // Peer (discriminated by peerState)
   peerId: string | null;
   peerState: PeerState['_tag'];
   peerError: PeerError<string> | null;
-  // Media (discriminated by mediaState)
   mediaState: MediaState['_tag'];
   localStream: MediaStream | null;
   devices: MediaDeviceInfo[];
   mediaMode: MediaMode;
-  mediaError: null; // No longer tracked in context — emitted as events
+  mediaError: null;
   permissions: MediaPermissions;
 };
 
@@ -49,9 +41,11 @@ function deriveState(peerState: PeerState, mediaState: MediaState): PeerClientSt
     peerState: peerState._tag,
     peerError: peerState._tag === 'error' ? peerState.lastError : null,
     mediaState: mediaState._tag,
-    localStream: mediaState._tag === 'active' || mediaState._tag === 'switching' || mediaState._tag === 'recovering'
-      ? (mediaState._tag === 'recovering' ? mediaState.oldStream : mediaState.stream)
-      : null,
+    localStream: mediaState._tag === 'active' || mediaState._tag === 'switching'
+      ? mediaState.stream
+      : mediaState._tag === 'recovering'
+        ? mediaState.oldStream
+        : null,
     devices: mediaState._tag === 'active' || mediaState._tag === 'switching'
       ? mediaState.devices
       : [],
@@ -65,30 +59,6 @@ function deriveState(peerState: PeerState, mediaState: MediaState): PeerClientSt
 
 // ── PeerClient ────────────────────────────────────────────────────────────────
 
-/**
- * High-level, event-driven wrapper around PeerJS for video calls, data
- * channels, and local media management.
- *
- * Internally coordinates two independent state machines:
- *
- *   - **PeerManager** — signaling, data connections, and media calls.
- *   - **MediaManager** — local stream acquisition, track health,
- *     device switching, and recovery.
- *
- * Both use discriminated union states — each state variant carries exactly
- * the data that exists in that state. No nullable context fields.
- *
- * @example
- * ```typescript
- * const client = new PeerClient(peer);
- *
- * client.on('peer.ready', ({ peerId }) => console.log('Ready:', peerId));
- * client.on('media.stream.ready', ({ stream }) => { video.srcObject = stream; });
- *
- * client.requestMedia({ audio: true, video: true });
- * client.call('remote-peer-id');
- * ```
- */
 export class PeerClient {
   private peer: Peer;
   private peerMachine: PeerManager;
@@ -97,7 +67,7 @@ export class PeerClient {
   constructor(peer: Peer) {
     this.peer = peer;
     this.peerMachine = new PeerManager({ peer });
-    this.mediaMachine = createMediaManager();
+    this.mediaMachine = new MediaMachine();
   }
 
   // ── Event subscription ──────────────────────────────────────────────────────
@@ -109,7 +79,7 @@ export class PeerClient {
     if ((eventType as string).startsWith('media.')) {
       return this.mediaMachine.on(
         eventType as MediaEmittedEvent['type'],
-        listener as Parameters<MediaMachine['on']>[1],
+        listener as any,
       );
     }
     return this.peerMachine.on(
@@ -147,12 +117,8 @@ export class PeerClient {
     };
   }
 
-  // ── Accessors (OOP Class Pattern) ──────────────────────────────────────────
+  // ── Accessors ──────────────────────────────────────────────────────────────
 
-  /**
-   * Provides direct access to the connection instances for type-safe method invocation.
-   * `if (conn instanceof ConnectionOpenState) conn.send(data)`
-   */
   public get connections(): Map<string, import('./connection/state').ConnectionState> {
     const state = this.peerMachine.getState();
     const result = new Map<string, import('./connection/state').ConnectionState>();
@@ -164,10 +130,6 @@ export class PeerClient {
     return result;
   }
 
-  /**
-   * Provides direct access to the call instances for type-safe method invocation.
-   * `if (call instanceof CallRingingState) call.answer(stream)`
-   */
   public get calls(): Map<string, import('./call/state').CallState> {
     const state = this.peerMachine.getState();
     const result = new Map<string, import('./call/state').CallState>();
@@ -226,22 +188,27 @@ export class PeerClient {
   public requestMedia(
     constraints: MediaStreamConstraints = { audio: true, video: true },
   ) {
-    this.mediaMachine.send({ type: 'REQUEST', constraints });
+    const state = this.mediaMachine.getState();
+    if (state._tag === 'idle') state.request(constraints);
   }
 
   public requestScreen(constraints?: DisplayMediaStreamOptions) {
-    this.mediaMachine.send({ type: 'REQUEST_SCREEN', constraints });
+    const state = this.mediaMachine.getState();
+    if (state._tag === 'idle') state.requestScreen(constraints);
   }
 
   public switchDevice(kind: 'audio' | 'video', deviceId: string) {
-    this.mediaMachine.send({ type: 'SWITCH_DEVICE', kind, deviceId });
+    const state = this.mediaMachine.getState();
+    if (state._tag === 'active') state.switchDevice(kind, deviceId);
   }
 
   public stopMedia() {
-    this.mediaMachine.send({ type: 'STOP' });
+    const state = this.mediaMachine.getState();
+    if (state._tag === 'active') state.stop();
+    else if (state._tag === 'switching') state.stop();
+    else if (state._tag === 'recovering') state.stop();
+    else if (state._tag === 'requesting') state.stop();
   }
-
-
 
   /**
    * Ensures a local MediaStream is available before executing a callback.
@@ -353,11 +320,13 @@ export class PeerClient {
   }
 
   public retryMedia() {
-    this.mediaMachine.send({ type: 'RETRY' });
+    const state = this.mediaMachine.getState();
+    if (state._tag === 'denied') state.retry();
   }
 
   public checkPermissions() {
-    this.mediaMachine.send({ type: 'CHECK_PERMISSIONS' });
+    const state = this.mediaMachine.getState();
+    if (state._tag === 'idle') state.checkPermissions();
   }
 
   // ── Audio output ───────────────────────────────────────────────────────────
@@ -380,7 +349,6 @@ export class PeerClient {
 
   public destroy() {
     this.peerMachine.destroy();
-    this.mediaMachine.send({ type: 'STOP' });
     this.mediaMachine.destroy();
   }
 }

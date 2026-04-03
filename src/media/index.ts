@@ -1,18 +1,15 @@
-export { createMediaManager, type MediaMachine } from './MediaManager';
+export { MediaMachine } from './MediaManager';
+export type { MediaEmittedEvent } from './types';
 export type {
   MediaState,
-  MediaIdle,
-  MediaActive,
-  MediaSwitching,
-  MediaRecovering,
-  MediaDenied,
-  MediaRequesting,
-  MediaCheckingPermissions,
-  MediaCommand,
-  MediaEvent,
-  MediaEmittedEvent,
+  MediaIdleState,
+  MediaActiveState,
+  MediaSwitchingState,
+  MediaRecoveringState,
+  MediaDeniedState,
+  MediaRequestingState,
+  MediaCheckingPermissionsState,
   MediaMode,
   PermissionState,
   MediaPermissions,
-} from './types';
-export { initialMediaState } from './types';
+} from './state';

@@ -5,14 +5,15 @@ export type { PeerClientState, Subscription } from './PeerClient';
 
 // Types for advanced / framework integration use
 export type {
-  PeerCommand,
   PeerEmittedEvent,
 } from './peer/types';
 
 export type {
-  MediaCommand,
   MediaEmittedEvent,
+} from './media/types';
+
+export type {
   MediaMode,
   PermissionState,
   MediaPermissions,
-} from './media/types';
+} from './media/state';
