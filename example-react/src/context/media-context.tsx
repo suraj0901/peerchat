@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { MediaMachine } from 'peerchat';
 import type { MediaState } from 'peerchat';
-import { useMachineState } from './use-machine';
+import { useMachineState } from '../hooks/use-machine';
 
 // ── Context ──────────────────────────────────────────────────────────────────
 

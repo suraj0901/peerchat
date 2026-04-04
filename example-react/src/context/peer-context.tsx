@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, type ReactNode } from 're
 import Peer from 'peerjs';
 import { PeerManager } from 'peerchat';
 import type { PeerState } from 'peerchat';
-import { useMachineState } from './use-machine';
+import { useMachineState } from '../hooks/use-machine';
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
