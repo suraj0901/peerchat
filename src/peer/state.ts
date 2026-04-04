@@ -102,8 +102,6 @@ export class PeerReadyState implements BasePeerState {
     this.peer.on('close', this.onClose);
   }
 
-  // ── Public commands ──────────────────────────────────────────────────────
-
   public connect(remotePeerId: string) {
     // Prevent duplicate
     for (const childMachine of this.connections.values()) {
@@ -336,13 +334,13 @@ export class PeerDisconnectedState implements BasePeerState {
 
 export class PeerErrorState implements BasePeerState {
   public readonly _tag = 'error';
-  constructor(public readonly lastError: PeerError<string>) {}
-  public destroy() {}
+  constructor(public readonly lastError: PeerError<string>) { }
+  public destroy() { }
 }
 
 export class PeerDestroyedState implements BasePeerState {
   public readonly _tag = 'destroyed';
-  public destroy() {}
+  public destroy() { }
 }
 
 // ── Union ────────────────────────────────────────────────────────────────────
