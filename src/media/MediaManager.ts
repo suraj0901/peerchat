@@ -1,4 +1,5 @@
 import { AbstractMachine } from '../core';
+import { createLogger } from '../core/logger';
 import {
   MediaIdleState,
   type MediaContext,
@@ -10,10 +11,13 @@ import type { MediaEmittedEvent } from './types';
 // ── MediaManager ──────────────────────────────────────────────────────────────
 
 export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent> {
+  protected readonly log = createLogger('MediaMachine');
   private permissionCleanup?: () => void;
 
   constructor() {
     super();
+
+    this.log.info('🔧 MediaMachine created');
 
     const ctx = this.createContext<MediaContext>({
       emit: (event) => this.emit(event),
@@ -30,7 +34,12 @@ export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent>
   // ── Permission Monitor ──────────────────────────────────────────────────────
 
   private startPermissionMonitor(): () => void {
-    if (!navigator.permissions?.query) return () => {};
+    if (!navigator.permissions?.query) {
+      this.log.debug('Permissions API not available — skipping permission monitor');
+      return () => {};
+    }
+
+    this.log.debug('Starting permission monitor');
 
     let camStatus: globalThis.PermissionStatus | null = null;
     let micStatus: globalThis.PermissionStatus | null = null;
@@ -40,6 +49,7 @@ export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent>
         camera: camStatus?.state ?? 'unknown',
         microphone: micStatus?.state ?? 'unknown',
       };
+      this.log.info('🔑 permission change detected', permissions);
       this.currentState.permissions = permissions;
       this.notifySubscribers();
       this.emit({ type: 'media.permission.status', permissions });
@@ -50,6 +60,11 @@ export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent>
         navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
         navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
       ]);
+
+      this.log.debug('Permission query results:', {
+        camera: camStatus?.state ?? 'unavailable',
+        microphone: micStatus?.state ?? 'unavailable',
+      });
 
       if (camStatus) camStatus.onchange = requery;
       if (micStatus) micStatus.onchange = requery;

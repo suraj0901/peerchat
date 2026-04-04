@@ -1,5 +1,8 @@
 import type { MachineContext } from '../core';
+import { createLogger } from '../core/logger';
 import type { MediaEmittedEvent } from './types';
+
+const log = createLogger('media');
 
 // ── Value Types ───────────────────────────────────────────────────────────────
 
@@ -42,21 +45,26 @@ export class MediaIdleState implements BaseMediaState {
   constructor(
     public permissions: MediaPermissions,
     private ctx: MediaContext,
-  ) { }
+  ) {
+    log.info('💤 MediaIdleState created', permissions);
+  }
 
   public request(constraints: MediaStreamConstraints) {
+    log.info('🎤 request() called', constraints);
     this.destroy();
     const next = new MediaRequestingState('user', constraints, {}, this.permissions, this.ctx);
     this.ctx.transition(next);
   }
 
   public requestScreen(constraints: DisplayMediaStreamOptions = {}) {
+    log.info('🖥 requestScreen() called', constraints);
     this.destroy();
     const next = new MediaRequestingState('screen', { audio: true, video: true }, constraints, this.permissions, this.ctx);
     this.ctx.transition(next);
   }
 
   public checkPermissions() {
+    log.info('🔑 checkPermissions() called');
     this.destroy();
     const next = new MediaCheckingPermissionsState(this.permissions, this.ctx);
     this.ctx.transition(next);
@@ -75,6 +83,7 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    log.info('🔑 MediaCheckingPermissionsState — querying Permissions API');
     this.check();
   }
 
@@ -89,19 +98,24 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
         navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
       ]);
 
-      if (this.aborted) return;
+      if (this.aborted) {
+        log.debug('  permission check aborted — ignoring results');
+        return;
+      }
 
       const permissions: MediaPermissions = {
         camera: cam?.state ?? 'unknown',
         microphone: mic?.state ?? 'unknown',
       };
 
+      log.info('  permission check complete', permissions);
       this.destroy();
       const next = new MediaIdleState(permissions, this.ctx);
       this.ctx.transition(next);
       this.ctx.emit({ type: 'media.permission.status', permissions });
-    } catch {
+    } catch (error) {
       if (this.aborted) return;
+      log.warn('  permission check failed', error);
       this.destroy();
       const next = new MediaIdleState(this.permissions, this.ctx);
       this.ctx.transition(next);
@@ -126,19 +140,24 @@ export class MediaRequestingState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    log.info(`📡 MediaRequestingState — mode: ${mode}`);
     this.acquire();
   }
 
   private async acquire() {
     try {
+      log.debug(`  acquiring ${this.mode} media...`);
       const stream = this.mode === 'screen'
         ? await navigator.mediaDevices.getDisplayMedia(this.screenConstraints)
         : await navigator.mediaDevices.getUserMedia(this.constraints);
 
       if (this.controller.signal.aborted) {
+        log.debug('  aborted after stream acquired — stopping tracks');
         stream.getTracks().forEach(t => t.stop());
         return;
       }
+
+      log.info(`  ✅ stream acquired — ${stream.getTracks().length} track(s): ${stream.getTracks().map(t => `${t.kind}:${t.readyState}`).join(', ')}`);
 
       const devices = await navigator.mediaDevices.enumerateDevices();
 
@@ -147,6 +166,7 @@ export class MediaRequestingState implements BaseMediaState {
         return;
       }
 
+      log.debug(`  ${devices.length} devices enumerated`);
       this.destroy();
       const next = new MediaActiveState(stream, devices, this.mode, this.constraints, this.permissions, this.ctx);
       this.ctx.transition(next);
@@ -156,10 +176,12 @@ export class MediaRequestingState implements BaseMediaState {
       this.destroy();
 
       if (isPermissionDenied(error)) {
+        log.warn('  ⛔ permission denied');
         const next = new MediaDeniedState(this.permissions, this.ctx);
         this.ctx.transition(next);
         this.ctx.emit({ type: 'media.permission.denied' });
       } else {
+        log.error('  ❌ stream acquisition failed', error);
         const next = new MediaIdleState(this.permissions, this.ctx);
         this.ctx.transition(next);
         this.ctx.emit({ type: 'media.stream.error', error: toError(error) });
@@ -168,6 +190,7 @@ export class MediaRequestingState implements BaseMediaState {
   }
 
   public stop() {
+    log.info('  stop() called while requesting');
     this.destroy();
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);
@@ -193,6 +216,7 @@ export class MediaActiveState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    log.info(`🟢 MediaActiveState — mode: ${mode}, tracks: ${stream.getTracks().map(t => `${t.kind}:${t.label}`).join(', ')}`);
     this.startMonitoring();
   }
 
@@ -208,6 +232,7 @@ export class MediaActiveState implements BaseMediaState {
 
     this.deviceChangeHandler = () => {
       void navigator.mediaDevices.enumerateDevices().then(devices => {
+        log.debug(`  device change detected — ${devices.length} devices`);
         (this as { devices: MediaDeviceInfo[] }).devices = devices;
         this.ctx.emit({ type: 'media.devices.updated', devices });
       });
@@ -216,6 +241,7 @@ export class MediaActiveState implements BaseMediaState {
   }
 
   private onTrackEnded(kind: 'audio' | 'video') {
+    log.warn(`  ⚠️ ${kind} track ended unexpectedly (mode: ${this.mode})`);
     if (this.mode === 'user') {
       // Unexpected track end — attempt recovery
       this.destroy();
@@ -225,6 +251,7 @@ export class MediaActiveState implements BaseMediaState {
       this.ctx.emit({ type: 'media.recovering' });
     } else {
       // Screen mode — user intentionally stopped sharing
+      log.info('  screen share ended by user');
       this.destroy();
       this.stream.getTracks().forEach(t => t.stop());
       const next = new MediaIdleState(this.permissions, this.ctx);
@@ -234,13 +261,18 @@ export class MediaActiveState implements BaseMediaState {
   }
 
   public switchDevice(kind: 'audio' | 'video', deviceId: string) {
-    if (this.mode !== 'user') return;
+    if (this.mode !== 'user') {
+      log.warn(`  switchDevice() ignored — mode is "${this.mode}"`);
+      return;
+    }
+    log.info(`  🔀 switchDevice(${kind}, "${deviceId}")`);
     this.destroy();
     const next = new MediaSwitchingState(this.stream, this.devices, this.mode, this.constraints, kind, deviceId, this.permissions, this.ctx);
     this.ctx.transition(next);
   }
 
   public stop() {
+    log.info('  stop() — stopping all tracks');
     this.destroy();
     this.stream.getTracks().forEach(t => t.stop());
     const next = new MediaIdleState(this.permissions, this.ctx);
@@ -274,6 +306,7 @@ export class MediaSwitchingState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    log.info(`🔀 MediaSwitchingState — switching ${kind} to device "${deviceId}"`);
     this.performSwitch();
   }
 
@@ -301,12 +334,14 @@ export class MediaSwitchingState implements BaseMediaState {
       });
       this.stream.addTrack(newTrack);
 
+      log.info(`  ✅ ${this.kind} device switched successfully`);
       this.destroy();
       const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx);
       this.ctx.transition(next);
       this.ctx.emit({ type: 'media.device.switched', kind: this.kind, stream: this.stream });
     } catch (error) {
       if (this.controller.signal.aborted) return;
+      log.error(`  ❌ ${this.kind} device switch failed`, error);
       this.destroy();
       // Return to active with existing stream
       const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx);
@@ -316,6 +351,7 @@ export class MediaSwitchingState implements BaseMediaState {
   }
 
   public stop() {
+    log.info('  stop() called while switching');
     this.destroy();
     this.stream.getTracks().forEach(t => t.stop());
     const next = new MediaIdleState(this.permissions, this.ctx);
@@ -341,6 +377,7 @@ export class MediaRecoveringState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    log.info('🔄 MediaRecoveringState — attempting to re-acquire media');
     this.acquire();
   }
 
@@ -360,6 +397,7 @@ export class MediaRecoveringState implements BaseMediaState {
         return;
       }
 
+      log.info('  ✅ media recovered successfully');
       this.destroy();
       this.oldStream.getTracks().forEach(t => t.stop());
       const next = new MediaActiveState(stream, devices, this.mode, this.constraints, this.permissions, this.ctx);
@@ -371,10 +409,12 @@ export class MediaRecoveringState implements BaseMediaState {
       this.oldStream.getTracks().forEach(t => t.stop());
 
       if (isPermissionDenied(error)) {
+        log.warn('  ⛔ recovery failed — permission denied');
         const next = new MediaDeniedState(this.permissions, this.ctx);
         this.ctx.transition(next);
         this.ctx.emit({ type: 'media.permission.denied' });
       } else {
+        log.error('  ❌ recovery failed', error);
         const next = new MediaIdleState(this.permissions, this.ctx);
         this.ctx.transition(next);
         this.ctx.emit({ type: 'media.stream.error', error: toError(error) });
@@ -383,6 +423,7 @@ export class MediaRecoveringState implements BaseMediaState {
   }
 
   public stop() {
+    log.info('  stop() called while recovering');
     this.destroy();
     this.oldStream.getTracks().forEach(t => t.stop());
     const next = new MediaIdleState(this.permissions, this.ctx);
@@ -403,9 +444,12 @@ export class MediaDeniedState implements BaseMediaState {
   constructor(
     public permissions: MediaPermissions,
     private ctx: MediaContext,
-  ) { }
+  ) {
+    log.warn('⛔ MediaDeniedState — user denied media permissions');
+  }
 
   public retry() {
+    log.info('  retry() — returning to idle');
     this.destroy();
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);

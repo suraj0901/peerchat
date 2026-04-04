@@ -3,6 +3,10 @@
 export { PeerManager } from './peer/PeerManager';
 export { MediaMachine } from './media/MediaManager';
 
+// ── Logging ───────────────────────────────────────────────────────────────────
+
+export { setLogging } from './core/logger';
+
 // ── Peer types ────────────────────────────────────────────────────────────────
 
 export type { PeerState } from './peer/state';

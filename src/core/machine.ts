@@ -1,9 +1,12 @@
+import { createLogger, type Logger } from './logger';
+
 export interface MachineContext<S> {
   transition: (nextState: S) => void;
 }
 
 export abstract class AbstractMachine<S extends { destroy(): void }, E extends { type: string } = never> {
   protected currentState!: S;
+  protected abstract readonly log: Logger;
   
   private transitionListeners = new Set<(next: S, prev: S) => void>();
   private stateSubscribers = new Set<() => void>();
@@ -14,9 +17,14 @@ export abstract class AbstractMachine<S extends { destroy(): void }, E extends {
       transition: (nextState: S) => {
         const prevState = this.currentState;
         if (prevState !== nextState) {
+          const prevTag = (prevState as any)?._tag ?? 'unknown';
+          const nextTag = (nextState as any)?._tag ?? 'unknown';
+          this.log.info(`⏭ transition: ${prevTag} → ${nextTag}`);
           this.currentState = nextState;
           this.transitionListeners.forEach(l => l(nextState, prevState));
           this.stateSubscribers.forEach(s => s());
+        } else {
+          this.log.debug('⏭ transition skipped (same state)');
         }
       },
       ...additionalCtx
@@ -38,11 +46,15 @@ export abstract class AbstractMachine<S extends { destroy(): void }, E extends {
   }
 
   protected emit(event: E): void {
+    this.log.info(`📢 emit: ${(event as { type: string }).type}`, event);
     const handlers = this.eventListeners.get((event as { type: string }).type);
     if (handlers) {
+      this.log.debug(`  → ${handlers.size} handler(s) notified`);
       for (const handler of handlers) {
         handler(event);
       }
+    } else {
+      this.log.debug(`  → no handlers registered for "${(event as { type: string }).type}"`);
     }
   }
 
@@ -54,6 +66,7 @@ export abstract class AbstractMachine<S extends { destroy(): void }, E extends {
       this.eventListeners.set(eventType as string, new Set());
     }
     this.eventListeners.get(eventType as string)!.add(handler);
+    this.log.debug(`🔔 on("${eventType}") handler registered`);
     return {
       unsubscribe: () => {
         const handlers = this.eventListeners.get(eventType as string);
@@ -70,6 +83,7 @@ export abstract class AbstractMachine<S extends { destroy(): void }, E extends {
   }
 
   public destroy() {
+    this.log.info('💀 destroy()');
     if (this.currentState) {
       this.currentState.destroy();
     }
