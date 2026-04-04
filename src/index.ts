@@ -18,7 +18,3 @@ export type { MediaMode, PermissionState, MediaPermissions } from './media/state
 
 export type { CallState } from './call/state';
 export type { ConnectionState } from './connection/state';
-
-// ── Core ──────────────────────────────────────────────────────────────────────
-
-export type { Unsubscribe } from './core';
