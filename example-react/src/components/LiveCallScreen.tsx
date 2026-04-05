@@ -4,7 +4,7 @@
 
 
 import type { CallState, ConnectionState } from "peerchat";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMachineState } from "../hooks/use-machine";
 import type { AnyMachine } from "../types";
 import { ChatSidebar } from "./ChatSidebar";
@@ -22,31 +22,7 @@ export function LiveCallScreen({ callMachine, connectionMachine }: LiveCallScree
 
   const [chatOpen, setChatOpen] = useState(true);
 
-  if (callState._tag === "connecting") {
-    return (
-      <div className="call-layout">
-        <div className="call-main call-main--full">
-          <div className="remote-video-container">
-            <div className="screen screen-center" style={{ background: '#000' }}>
-              <div className="loader" />
-              <p className="loader-text">Connecting to {callState.remotePeerId}…</p>
-            </div>
-          </div>
-          <div className="controls-bar">
-            <div className="controls-group" />
-            <button
-              className="ctrl-btn ctrl-btn--hangup"
-              onClick={() => callState.hangUp()}
-              title="Cancel"
-              id="hangup-button"
-            >
-              {Icons.phoneOff}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (callState._tag === "connecting") return <CallConnectingScreen callState={callState} />
 
   if (callState._tag != "live") return null
 
@@ -54,7 +30,19 @@ export function LiveCallScreen({ callMachine, connectionMachine }: LiveCallScree
     <div className="call-layout">
       {/* Main video area */}
       <div className={`call-main ${chatOpen ? '' : 'call-main--full'}`}>
-        <RemoteVideo remoteStream={callState.remoteStream} remotePeerId={callState.remotePeerId} />
+        <div className="remote-video-container">
+          <video
+            ref={element => {
+              if (element && element.srcObject !== callState.remoteStream) {
+                element.srcObject = callState.remoteStream;
+              }
+            }}
+            autoPlay
+            playsInline
+            className="remote-video"
+            id="remote-video" />
+          <div className="remote-label">{callState.remotePeerId}</div>
+        </div>
 
         {/* Local PiP - state handled internally */}
         <LocalPiP />
@@ -99,28 +87,27 @@ export function LiveCallScreen({ callMachine, connectionMachine }: LiveCallScree
   );
 }
 
-
-interface RemoteVideoProps {
-  remoteStream: MediaStream;
-  remotePeerId: string;
-}
-
-function RemoteVideo({ remoteStream, remotePeerId }: RemoteVideoProps) {
-  const remoteStream_cached = useMemo(() => remoteStream, [remoteStream])
-  return (
-    <div className="remote-video-container">
-      <video
-        ref={element => {
-          if (element) {
-            element.srcObject = remoteStream_cached;
-          }
-        }}
-        autoPlay
-        playsInline
-        className="remote-video"
-        id="remote-video" />
-      <div className="remote-label">{remotePeerId}</div>
+function CallConnectingScreen({ callState }: { callState: Extract<CallState, { _tag: "connecting" }> }) {
+  return <div className="call-layout">
+    <div className="call-main call-main--full">
+      <div className="remote-video-container">
+        <div className="screen screen--center" style={{ background: '#000' }}>
+          <div className="loader">
+          </div>
+          <p className="loader-text">Connecting to {callState.remotePeerId}…</p>
+        </div>
+      </div>
+      <div className="controls-bar">
+        <div className="controls-group" />
+        <button
+          className="ctrl-btn ctrl-btn--hangup"
+          onClick={() => callState.hangUp()}
+          title="Cancel"
+          id="hangup-button"
+        >
+          {Icons.phoneOff}
+        </button>
+      </div>
     </div>
-  );
+  </div>;
 }
-

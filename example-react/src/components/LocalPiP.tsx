@@ -23,7 +23,7 @@ export function LocalPiP() {
         <div className="local-pip">
             <video
                 ref={(element) => {
-                    if (element) {
+                    if (element && element.srcObject !== mediaState.stream) {
                         element.srcObject = mediaState.stream;
                     }
                 }}

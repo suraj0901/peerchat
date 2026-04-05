@@ -21,7 +21,7 @@ export function HomeScreen({ peerState }: { peerState: PeerReadyState; }) {
     : null;
 
   useEffect(() => {
-    if (localVideoRef.current) {
+    if (localVideoRef.current && localVideoRef.current.srcObject !== localStream) {
       localVideoRef.current.srcObject = localStream;
     }
   }, [localStream]);
