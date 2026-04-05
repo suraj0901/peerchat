@@ -7,11 +7,7 @@ import { ReadyApp } from './components/ReadyApp';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function App() {
-  const { state: peerState, manager } = usePeerContext();
-
-  manager.on("peer.ready", ({ peerId }) => {
-    console.log(`Peer id ${peerId}`)
-  })
+  const { state: peerState } = usePeerContext();
 
   switch (peerState._tag) {
     case 'initializing':

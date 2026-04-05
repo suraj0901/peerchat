@@ -18,6 +18,7 @@ export type MediaPermissions = {
 
 export interface MediaContext extends MachineContext<MediaState> {
   emit: (event: MediaEmittedEvent) => void;
+  notifySubscribers: () => void;
 }
 
 // ── Base ──────────────────────────────────────────────────────────────────────
@@ -205,6 +206,8 @@ export class MediaRequestingState implements BaseMediaState {
 
 export class MediaActiveState implements BaseMediaState {
   public readonly _tag = 'active';
+  public audioMuted: boolean;
+  public videoMuted: boolean;
   private trackHandlers: Array<{ track: MediaStreamTrack; handler: () => void }> = [];
   private deviceChangeHandler: (() => void) | null = null;
 
@@ -215,8 +218,15 @@ export class MediaActiveState implements BaseMediaState {
     public readonly constraints: MediaStreamConstraints,
     public permissions: MediaPermissions,
     private ctx: MediaContext,
+    audioMuted = false,
+    videoMuted = false,
   ) {
-    log.info(`🟢 MediaActiveState — mode: ${mode}, tracks: ${stream.getTracks().map(t => `${t.kind}:${t.label}`).join(', ')}`);
+    this.audioMuted = audioMuted;
+    this.videoMuted = videoMuted;
+    // Apply mute state to tracks (important after device switch / recovery)
+    stream.getAudioTracks().forEach(t => (t.enabled = !audioMuted));
+    stream.getVideoTracks().forEach(t => (t.enabled = !videoMuted));
+    log.info(`🟢 MediaActiveState — mode: ${mode}, audioMuted: ${audioMuted}, videoMuted: ${videoMuted}, tracks: ${stream.getTracks().map(t => `${t.kind}:${t.label}`).join(', ')}`);
     this.startMonitoring();
   }
 
@@ -260,6 +270,22 @@ export class MediaActiveState implements BaseMediaState {
     }
   }
 
+  public toggleAudio = () => {
+    this.audioMuted = !this.audioMuted;
+    this.stream.getAudioTracks().forEach(t => (t.enabled = !this.audioMuted));
+    log.info(`  🔇 toggleAudio → ${this.audioMuted ? 'muted' : 'unmuted'}`);
+    this.ctx.emit({ type: 'media.audio.toggled', muted: this.audioMuted });
+    this.ctx.notifySubscribers()
+  }
+
+  public toggleVideo = () => {
+    this.videoMuted = !this.videoMuted;
+    this.stream.getVideoTracks().forEach(t => (t.enabled = !this.videoMuted));
+    log.info(`  📷 toggleVideo → ${this.videoMuted ? 'off' : 'on'}`);
+    this.ctx.emit({ type: 'media.video.toggled', muted: this.videoMuted });
+    this.ctx.notifySubscribers()
+  }
+
   public switchDevice(kind: 'audio' | 'video', deviceId: string) {
     if (this.mode !== 'user') {
       log.warn(`  switchDevice() ignored — mode is "${this.mode}"`);
@@ -267,7 +293,7 @@ export class MediaActiveState implements BaseMediaState {
     }
     log.info(`  🔀 switchDevice(${kind}, "${deviceId}")`);
     this.destroy();
-    const next = new MediaSwitchingState(this.stream, this.devices, this.mode, this.constraints, kind, deviceId, this.permissions, this.ctx);
+    const next = new MediaSwitchingState(this.stream, this.devices, this.mode, this.constraints, kind, deviceId, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
     this.ctx.transition(next);
   }
 
@@ -305,6 +331,8 @@ export class MediaSwitchingState implements BaseMediaState {
     public readonly deviceId: string,
     public permissions: MediaPermissions,
     private ctx: MediaContext,
+    private readonly audioMuted: boolean = false,
+    private readonly videoMuted: boolean = false,
   ) {
     log.info(`🔀 MediaSwitchingState — switching ${kind} to device "${deviceId}"`);
     this.performSwitch();
@@ -336,7 +364,7 @@ export class MediaSwitchingState implements BaseMediaState {
 
       log.info(`  ✅ ${this.kind} device switched successfully`);
       this.destroy();
-      const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx);
+      const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
       this.ctx.transition(next);
       this.ctx.emit({ type: 'media.device.switched', kind: this.kind, stream: this.stream });
     } catch (error) {
@@ -344,7 +372,7 @@ export class MediaSwitchingState implements BaseMediaState {
       log.error(`  ❌ ${this.kind} device switch failed`, error);
       this.destroy();
       // Return to active with existing stream
-      const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx);
+      const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
       this.ctx.transition(next);
       this.ctx.emit({ type: 'media.device.switch.failed', kind: this.kind, error: toError(error) });
     }

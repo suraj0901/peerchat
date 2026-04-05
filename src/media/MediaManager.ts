@@ -21,6 +21,7 @@ export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent>
 
     const ctx = this.createContext<MediaContext>({
       emit: (event) => this.emit(event),
+      notifySubscribers: () => this.notifySubscribers()
     });
 
     this.currentState = new MediaIdleState(
@@ -36,7 +37,7 @@ export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent>
   private startPermissionMonitor(): () => void {
     if (!navigator.permissions?.query) {
       this.log.debug('Permissions API not available — skipping permission monitor');
-      return () => {};
+      return () => { };
     }
 
     this.log.debug('Starting permission monitor');

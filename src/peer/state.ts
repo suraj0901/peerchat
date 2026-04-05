@@ -1,10 +1,8 @@
-import type { Peer, PeerError, MediaConnection, DataConnection } from 'peerjs';
-import type { MachineContext } from '../core';
-import { createLogger } from '../core/logger';
+import type { DataConnection, MediaConnection, Peer, PeerError } from 'peerjs';
 import { CallMachine } from '../call/CallMachine';
 import { ConnectionMachine } from '../connection/ConnectionMachine';
-import type { CallState } from '../call/state';
-import type { ConnectionState } from '../connection/state';
+import type { MachineContext } from '../core';
+import { createLogger } from '../core/logger';
 import { isFatalError, type PeerEmittedEvent } from './types';
 
 const log = createLogger('peer');

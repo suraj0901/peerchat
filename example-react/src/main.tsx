@@ -6,11 +6,9 @@ import './index.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <PeerProvider>
-      <MediaProvider>
-        <App />
-      </MediaProvider>
-    </PeerProvider>
-  </StrictMode>,
+  <PeerProvider>
+    <MediaProvider>
+      <App />
+    </MediaProvider>
+  </PeerProvider>
 )

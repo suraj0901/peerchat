@@ -11,6 +11,8 @@ export type MediaEmittedEvent =
   | { type: 'media.permission.denied' }
   | { type: 'media.track.ended'; kind: 'audio' | 'video' }
   | { type: 'media.recovering' }
+  | { type: 'media.audio.toggled'; muted: boolean }
+  | { type: 'media.video.toggled'; muted: boolean }
   | { type: 'media.device.switched'; kind: 'audio' | 'video'; stream: MediaStream }
   | { type: 'media.device.switch.failed'; kind: 'audio' | 'video'; error: Error }
   | { type: 'media.devices.updated'; devices: MediaDeviceInfo[] }

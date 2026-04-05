@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
-import Peer from 'peerjs';
-import { PeerManager } from 'peerchat';
 import type { PeerState } from 'peerchat';
+import { PeerManager } from 'peerchat';
+import Peer from 'peerjs';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useMachineState } from '../hooks/use-machine';
 
 // ── Context ──────────────────────────────────────────────────────────────────
@@ -16,20 +16,21 @@ const PeerContext = createContext<PeerContextValue | null>(null);
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 export function PeerProvider({ children }: { children: ReactNode }) {
-  const managerRef = useRef<PeerManager>(undefined);
+  const [manager] = useState<PeerManager>(() => {
+    return new PeerManager({ peer: new Peer() })
+  });
 
-  if (!managerRef.current) {
-    managerRef.current = new PeerManager({ peer: new Peer() });
-  }
 
-  const state = useMachineState(managerRef.current);
+  const state = useMachineState(manager);
 
   useEffect(() => {
-    return () => managerRef.current?.destroy();
-  }, []);
+    return () => {
+      manager.destroy()
+    }
+  }, [manager]);
 
   return (
-    <PeerContext.Provider value={{ manager: managerRef.current, state }}>
+    <PeerContext.Provider value={{ manager, state }}>
       {children}
     </PeerContext.Provider>
   );
