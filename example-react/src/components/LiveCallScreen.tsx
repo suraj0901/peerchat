@@ -22,11 +22,33 @@ export function LiveCallScreen({ callMachine, connectionMachine }: LiveCallScree
 
   const [chatOpen, setChatOpen] = useState(true);
 
-  if (callState._tag != "live") return null
+  if (callState._tag === "connecting") {
+    return (
+      <div className="call-layout">
+        <div className="call-main call-main--full">
+          <div className="remote-video-container">
+            <div className="screen screen-center" style={{ background: '#000' }}>
+              <div className="loader" />
+              <p className="loader-text">Connecting to {callState.remotePeerId}…</p>
+            </div>
+          </div>
+          <div className="controls-bar">
+            <div className="controls-group" />
+            <button
+              className="ctrl-btn ctrl-btn--hangup"
+              onClick={() => callState.hangUp()}
+              title="Cancel"
+              id="hangup-button"
+            >
+              {Icons.phoneOff}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const handleHangUp = () => {
-    callState.hangUp();
-  };
+  if (callState._tag != "live") return null
 
   return (
     <div className="call-layout">
@@ -57,7 +79,7 @@ export function LiveCallScreen({ callMachine, connectionMachine }: LiveCallScree
           {/* Hang up */}
           <button
             className="ctrl-btn ctrl-btn--hangup"
-            onClick={handleHangUp}
+            onClick={() => callState.hangUp()}
             title="Hang up"
             id="hangup-button"
           >
