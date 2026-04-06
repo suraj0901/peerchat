@@ -1,11 +1,12 @@
-import type { DataConnection, MediaConnection, Peer, PeerError } from 'peerjs';
-import { CallMachine } from '../call/CallMachine';
-import { ConnectionMachine } from '../connection/ConnectionMachine';
-import type { MachineContext } from '../core';
-import { createLogger } from '../core/logger';
-import { isFatalError, type PeerEmittedEvent } from './types';
+import type { DataConnection, MediaConnection, Peer, PeerError } from "peerjs";
+import { CallMachine } from "../call/CallMachine";
+import { ConnectionMachine } from "../connection/ConnectionMachine";
+import type { MachineContext } from "../core";
+import { createLogger } from "../core/logger";
+import { isFatalError, type PeerEmittedEvent } from "./types";
+import type { CallState } from "../call";
 
-const log = createLogger('peer');
+const log = createLogger("peer");
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -17,14 +18,19 @@ export interface PeerContext extends MachineContext<PeerState> {
 // ── Base ──────────────────────────────────────────────────────────────────────
 
 export interface BasePeerState {
-  readonly _tag: 'initializing' | 'ready' | 'disconnected' | 'error' | 'destroyed';
+  readonly _tag:
+    | "initializing"
+    | "ready"
+    | "disconnected"
+    | "error"
+    | "destroyed";
   destroy(): void;
 }
 
 // ── PeerInitializingState ────────────────────────────────────────────────────
 
 export class PeerInitializingState implements BasePeerState {
-  public readonly _tag = 'initializing';
+  public readonly _tag = "initializing";
 
   constructor(
     public readonly peer: Peer,
@@ -32,34 +38,52 @@ export class PeerInitializingState implements BasePeerState {
     public readonly baseRetryDelay: number,
     private ctx: PeerContext,
   ) {
-    log.info('🚀 PeerInitializingState created — waiting for PeerJS "open" event');
-    log.debug('  peer.id =', peer.id, '| peer.open =', peer.open, '| peer.destroyed =', peer.destroyed);
-    this.peer.on('open', this.onOpen);
-    this.peer.on('error', this.onError);
-    this.peer.on('close', this.onClose);
-    this.peer.on('disconnected', this.onDisconnected);
+    log.info(
+      '🚀 PeerInitializingState created — waiting for PeerJS "open" event',
+    );
+    log.debug(
+      "  peer.id =",
+      peer.id,
+      "| peer.open =",
+      peer.open,
+      "| peer.destroyed =",
+      peer.destroyed,
+    );
+    this.peer.on("open", this.onOpen);
+    this.peer.on("error", this.onError);
+    this.peer.on("close", this.onClose);
+    this.peer.on("disconnected", this.onDisconnected);
   }
 
   private onOpen = (id: string) => {
     log.info(`✅ PeerJS "open" fired — peerId: ${id}`);
     this.destroy();
     const next = new PeerReadyState(
-      this.peer, id, new Map(), new Map(),
-      this.maxRetries, this.baseRetryDelay, this.ctx,
+      this.peer,
+      id,
+      new Map(),
+      new Map(),
+      this.maxRetries,
+      this.baseRetryDelay,
+      this.ctx,
     );
     this.ctx.transition(next);
-    this.ctx.emit({ type: 'peer.ready', peerId: id });
+    this.ctx.emit({ type: "peer.ready", peerId: id });
   };
 
   private onError = (error: PeerError<string>) => {
-    log.error('❌ PeerJS "error" during initialization', error.type, error.message);
+    log.error(
+      '❌ PeerJS "error" during initialization',
+      error.type,
+      error.message,
+    );
     if (isFatalError(error)) {
-      log.warn('  → fatal error — transitioning to error state');
+      log.warn("  → fatal error — transitioning to error state");
       this.destroy();
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
     }
-    this.ctx.emit({ type: 'peer.error', error });
+    this.ctx.emit({ type: "peer.error", error });
   };
 
   private onClose = () => {
@@ -74,26 +98,34 @@ export class PeerInitializingState implements BasePeerState {
     log.warn('⚠️ PeerJS "disconnected" during initialization');
     this.destroy();
     const next = new PeerDisconnectedState(
-      this.peer, '', new Map(), new Map(), 0,
-      this.maxRetries, this.baseRetryDelay, this.ctx,
+      this.peer,
+      "",
+      new Map(),
+      new Map(),
+      0,
+      this.maxRetries,
+      this.baseRetryDelay,
+      this.ctx,
     );
     this.ctx.transition(next);
-    this.ctx.emit({ type: 'peer.disconnected' });
+    this.ctx.emit({ type: "peer.disconnected" });
   };
 
   public destroy() {
-    log.debug('  PeerInitializingState.destroy() — unregistering PeerJS listeners');
-    this.peer.off('open', this.onOpen);
-    this.peer.off('error', this.onError);
-    this.peer.off('close', this.onClose);
-    this.peer.off('disconnected', this.onDisconnected);
+    log.debug(
+      "  PeerInitializingState.destroy() — unregistering PeerJS listeners",
+    );
+    this.peer.off("open", this.onOpen);
+    this.peer.off("error", this.onError);
+    this.peer.off("close", this.onClose);
+    this.peer.off("disconnected", this.onDisconnected);
   }
 }
 
 // ── PeerReadyState ───────────────────────────────────────────────────────────
 
 export class PeerReadyState implements BasePeerState {
-  public readonly _tag = 'ready';
+  public readonly _tag = "ready";
 
   constructor(
     public readonly peer: Peer,
@@ -105,11 +137,11 @@ export class PeerReadyState implements BasePeerState {
     private ctx: PeerContext,
   ) {
     log.info(`✅ PeerReadyState created — peerId: ${peerId}`);
-    this.peer.on('connection', this.onConnection);
-    this.peer.on('call', this.onIncomingCall);
-    this.peer.on('disconnected', this.onDisconnected);
-    this.peer.on('error', this.onError);
-    this.peer.on('close', this.onClose);
+    this.peer.on("connection", this.onConnection);
+    this.peer.on("call", this.onIncomingCall);
+    this.peer.on("disconnected", this.onDisconnected);
+    this.peer.on("error", this.onError);
+    this.peer.on("close", this.onClose);
   }
 
   public connect(remotePeerId: string) {
@@ -118,15 +150,26 @@ export class PeerReadyState implements BasePeerState {
     // Prevent duplicate
     for (const childMachine of this.connections.values()) {
       const child = childMachine.getState();
-      if ((child._tag === 'connecting' || child._tag === 'open') && child.remotePeerId === remotePeerId) {
-        log.warn(`  → duplicate connection to "${remotePeerId}" — skipping (existing state: ${child._tag})`);
+      if (
+        (child._tag === "connecting" || child._tag === "open") &&
+        child.remotePeerId === remotePeerId
+      ) {
+        log.warn(
+          `  → duplicate connection to "${remotePeerId}" — skipping (existing state: ${child._tag})`,
+        );
         return;
       }
     }
 
     const connection = this.peer.connect(remotePeerId);
-    log.debug(`  → PeerJS connection created, connectionId: ${connection.connectionId}`);
-    const child = this.spawnConnectionChild(connection, connection.connectionId, remotePeerId);
+    log.debug(
+      `  → PeerJS connection created, connectionId: ${connection.connectionId}`,
+    );
+    const child = this.spawnConnectionChild(
+      connection,
+      connection.connectionId,
+      remotePeerId,
+    );
     this.connections.set(connection.connectionId, child);
     this.ctx.notifyChange();
   }
@@ -137,57 +180,146 @@ export class PeerReadyState implements BasePeerState {
     // Prevent duplicate
     for (const childMachine of this.calls.values()) {
       const child = childMachine.getState();
-      if ((child._tag === 'ringing' || child._tag === 'connecting' || child._tag === 'live') && child.remotePeerId === remotePeerId) {
-        log.warn(`  → duplicate call to "${remotePeerId}" — skipping (existing state: ${child._tag})`);
+      if (
+        (child._tag === "ringing" ||
+          child._tag === "connecting" ||
+          child._tag === "live") &&
+        child.remotePeerId === remotePeerId
+      ) {
+        log.warn(
+          `  → duplicate call to "${remotePeerId}" — skipping (existing state: ${child._tag})`,
+        );
         return;
       }
     }
 
     const call = this.peer.call(remotePeerId, localStream);
     log.debug(`  → PeerJS call created, callId: ${call.connectionId}`);
-    const child = this.spawnCallChild(call, call.connectionId, remotePeerId, 'outbound');
+    const child = this.spawnCallChild(
+      call,
+      call.connectionId,
+      remotePeerId,
+      "outbound",
+    );
+
+    this.createParallelDataConnection(remotePeerId, child);
+
     this.calls.set(call.connectionId, child);
     this.ctx.notifyChange();
+  }
+
+  private createParallelDataConnection(
+    remotePeerId: string,
+    callMachine: CallMachine,
+  ) {
+    let connection = this.getConnection(remotePeerId);
+    if (!connection) {
+      console.log(`  no existing connection to "${remotePeerId}" found for call ${callMachine.getState().callId} — creating parallel connection`);
+      this.connect(remotePeerId);
+      callMachine.onTransition((state) => {
+        const connectionId = this.sendRemoteCloseMessage(state, remotePeerId);
+        if (connectionId) {
+          this.removeConnection(connectionId);
+        }
+      });
+    }else {
+      callMachine.onTransition((state) => {
+        this.sendRemoteCloseMessage(state, remotePeerId);
+      });
+    }
+  }
+
+  private getConnection(remotePeerId: string) {
+    for (const childMachine of this.connections.values()) {
+      const child = childMachine.getState();
+      if (child._tag === "open" && child.remotePeerId === remotePeerId) {
+        return child;
+      }
+    }
+    return null;
+  }
+
+  private sendRemoteCloseMessage(state: CallState, remotePeerId: string) {
+    console.log(`Call ${state.callId} with "${remotePeerId}" transitioned to state: ${state._tag}`);
+    if (state._tag !== "ended" && state._tag !== "error") return null;
+    console.log(`Call ${state.callId} with "${remotePeerId}" ended with state: ${state._tag} — sending remote_close message if connection exists`);
+    const connection = this.getConnection(remotePeerId);
+    if (connection) {
+      console.log("sending remote_close")
+      connection.send({ type: "remote_close", callId: state.callId });
+      return connection.connectionId;
+    }else {
+      console.log("no open connection found to send remote_close message")
+    }
+    return null;
   }
 
   // ── PeerJS callbacks ─────────────────────────────────────────────────────
 
   private onConnection = (connection: DataConnection) => {
-    log.info(`📥 incoming connection from "${connection.peer}", connectionId: ${connection.connectionId}`);
-    const child = this.spawnConnectionChild(connection, connection.connectionId, connection.peer);
+    log.info(
+      `📥 incoming connection from "${connection.peer}", connectionId: ${connection.connectionId}`,
+    );
+    const child = this.spawnConnectionChild(
+      connection,
+      connection.connectionId,
+      connection.peer,
+    );
     this.connections.set(connection.connectionId, child);
     this.ctx.notifyChange();
   };
 
   private onIncomingCall = (call: MediaConnection) => {
-    log.info(`📥 incoming call from "${call.peer}", callId: ${call.connectionId}`);
-    const child = this.spawnCallChild(call, call.connectionId, call.peer, 'inbound');
+    log.info(
+      `📥 incoming call from "${call.peer}", callId: ${call.connectionId}`,
+    );
+    const child = this.spawnCallChild(
+      call,
+      call.connectionId,
+      call.peer,
+      "inbound",
+    );
+    this.createParallelDataConnection(call.peer, child);
     this.calls.set(call.connectionId, child);
     this.ctx.notifyChange();
-    this.ctx.emit({ type: 'call.incoming', callId: call.connectionId, remotePeerId: call.peer });
+    this.ctx.emit({
+      type: "call.incoming",
+      callId: call.connectionId,
+      remotePeerId: call.peer,
+    });
   };
 
   private onDisconnected = () => {
-    log.warn('⚠️ PeerJS "disconnected" — peer lost connection to signaling server');
+    log.warn(
+      '⚠️ PeerJS "disconnected" — peer lost connection to signaling server',
+    );
     this.destroy();
     const next = new PeerDisconnectedState(
-      this.peer, this.peerId, this.connections, this.calls, 0,
-      this.maxRetries, this.baseRetryDelay, this.ctx,
+      this.peer,
+      this.peerId,
+      this.connections,
+      this.calls,
+      0,
+      this.maxRetries,
+      this.baseRetryDelay,
+      this.ctx,
     );
     this.ctx.transition(next);
-    this.ctx.emit({ type: 'peer.disconnected' });
+    this.ctx.emit({ type: "peer.disconnected" });
   };
 
   private onError = (error: PeerError<string>) => {
     log.error('❌ PeerJS "error" in ready state', error.type, error.message);
     if (isFatalError(error)) {
-      log.warn('  → fatal error — cleaning up children and transitioning to error state');
+      log.warn(
+        "  → fatal error — cleaning up children and transitioning to error state",
+      );
       this.cleanupChildren();
       this.destroy();
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
     }
-    this.ctx.emit({ type: 'peer.error', error });
+    this.ctx.emit({ type: "peer.error", error });
   };
 
   private onClose = () => {
@@ -201,24 +333,58 @@ export class PeerReadyState implements BasePeerState {
 
   // ── Child helpers ────────────────────────────────────────────────────────
 
-  private spawnConnectionChild(connection: DataConnection, connectionId: string, remotePeerId: string): ConnectionMachine {
-    log.debug(`  spawning ConnectionMachine for "${remotePeerId}" (id: ${connectionId})`);
+  private spawnConnectionChild(
+    connection: DataConnection,
+    connectionId: string,
+    remotePeerId: string,
+  ): ConnectionMachine {
+    log.debug(
+      `  spawning ConnectionMachine for "${remotePeerId}" (id: ${connectionId})`,
+    );
     const machine = new ConnectionMachine(
-      connection, connectionId, remotePeerId,
-      (id, data) => this.ctx.emit({ type: 'connection.data', connectionId: id, data }),
+      connection,
+      connectionId,
+      remotePeerId,
+      (id, data) => {
+        const event = data as { type: string; callId: string };
+        if (event?.type === "remote_close") {
+          console.error(
+            `  received remote_close for callId ${event.callId} on connection ${id} — closing associated call`,
+          );
+          this.removeCall(event.callId, {
+            type: "call.ended",
+            callId: event.callId,
+          });
+          return;
+        }
+        this.ctx.emit({ type: "connection.data", connectionId: id, data });
+      },
     );
 
     machine.onTransition((next, prev) => {
-      log.info(`  connection[${connectionId}] child transition: ${prev._tag} → ${next._tag}`);
-      if (next._tag === 'open' && prev._tag === 'connecting') {
-        this.ctx.emit({ type: 'connection.opened', connectionId, remotePeerId });
+      log.info(
+        `  connection[${connectionId}] child transition: ${prev._tag} → ${next._tag}`,
+      );
+      if (next._tag === "open" && prev._tag === "connecting") {
+        this.ctx.emit({
+          type: "connection.opened",
+          connectionId,
+          remotePeerId,
+        });
       }
-      if (next._tag === 'closed') {
-        this.removeConnection(connectionId, { type: 'connection.closed', connectionId });
+      if (next._tag === "closed") {
+        this.removeConnection(connectionId, {
+          type: "connection.closed",
+          connectionId,
+        });
         return;
       }
-      if (next._tag === 'error') {
-        this.removeConnection(connectionId, { type: 'connection.error', connectionId, error: next.error });
+      if (next._tag === "error") {
+        this.removeConnection(connectionId, {
+          type: "connection.error",
+          connectionId,
+          error: next.error,
+        });
         return;
       }
       this.ctx.notifyChange();
@@ -236,21 +402,39 @@ export class PeerReadyState implements BasePeerState {
     if (event) this.ctx.emit(event);
   }
 
-  private spawnCallChild(call: MediaConnection, callId: string, remotePeerId: string, direction: 'inbound' | 'outbound'): CallMachine {
-    log.debug(`  spawning CallMachine for "${remotePeerId}" (id: ${callId}, direction: ${direction})`);
+  private spawnCallChild(
+    call: MediaConnection,
+    callId: string,
+    remotePeerId: string,
+    direction: "inbound" | "outbound",
+  ): CallMachine {
+    log.debug(
+      `  spawning CallMachine for "${remotePeerId}" (id: ${callId}, direction: ${direction})`,
+    );
     const machine = new CallMachine(call, callId, remotePeerId, direction);
 
     machine.onTransition((next, prev) => {
-      log.info(`  call[${callId}] child transition: ${prev._tag} → ${next._tag}`);
-      if (next._tag === 'live' && prev._tag === 'connecting') {
-        this.ctx.emit({ type: 'call.active', callId, remotePeerId, remoteStream: next.remoteStream });
+      log.info(
+        `  call[${callId}] child transition: ${prev._tag} → ${next._tag}`,
+      );
+      if (next._tag === "live" && prev._tag === "connecting") {
+        this.ctx.emit({
+          type: "call.active",
+          callId,
+          remotePeerId,
+          remoteStream: next.remoteStream,
+        });
       }
-      if (next._tag === 'ended') {
-        this.removeCall(callId, { type: 'call.ended', callId });
+      if (next._tag === "ended") {
+        this.removeCall(callId, { type: "call.ended", callId });
         return;
       }
-      if (next._tag === 'error') {
-        this.removeCall(callId, { type: 'call.error', callId, error: next.error });
+      if (next._tag === "error") {
+        this.removeCall(callId, {
+          type: "call.error",
+          callId,
+          error: next.error,
+        });
         return;
       }
       this.ctx.notifyChange();
@@ -269,29 +453,39 @@ export class PeerReadyState implements BasePeerState {
   }
 
   private cleanupChildren() {
-    log.debug(`  cleaning up ${this.connections.size} connection(s) and ${this.calls.size} call(s)`);
+    log.debug(
+      `  cleaning up ${this.connections.size} connection(s) and ${this.calls.size} call(s)`,
+    );
     for (const conn of this.connections.values()) {
-      try { conn.destroy(); } catch { /* ignore */ }
+      try {
+        conn.destroy();
+      } catch {
+        /* ignore */
+      }
     }
     for (const call of this.calls.values()) {
-      try { call.destroy(); } catch { /* ignore */ }
+      try {
+        call.destroy();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
   public destroy() {
-    log.debug('  PeerReadyState.destroy() — unregistering PeerJS listeners');
-    this.peer.off('connection', this.onConnection);
-    this.peer.off('call', this.onIncomingCall);
-    this.peer.off('disconnected', this.onDisconnected);
-    this.peer.off('error', this.onError);
-    this.peer.off('close', this.onClose);
+    log.debug("  PeerReadyState.destroy() — unregistering PeerJS listeners");
+    this.peer.off("connection", this.onConnection);
+    this.peer.off("call", this.onIncomingCall);
+    this.peer.off("disconnected", this.onDisconnected);
+    this.peer.off("error", this.onError);
+    this.peer.off("close", this.onClose);
   }
 }
 
 // ── PeerDisconnectedState ────────────────────────────────────────────────────
 
 export class PeerDisconnectedState implements BasePeerState {
-  public readonly _tag = 'disconnected';
+  public readonly _tag = "disconnected";
   private retryCount: number;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
@@ -306,43 +500,59 @@ export class PeerDisconnectedState implements BasePeerState {
     private ctx: PeerContext,
   ) {
     this.retryCount = initialRetryCount;
-    log.warn(`⚠️ PeerDisconnectedState created — retryCount: ${this.retryCount}/${this.maxRetries}`);
+    log.warn(
+      `⚠️ PeerDisconnectedState created — retryCount: ${this.retryCount}/${this.maxRetries}`,
+    );
 
-    this.peer.on('error', this.onError);
-    this.peer.on('close', this.onClose);
+    this.peer.on("error", this.onError);
+    this.peer.on("close", this.onClose);
 
     // Auto-reconnect
     if (this.retryCount < this.maxRetries) {
-      const delay = Math.min(this.baseRetryDelay * 2 ** this.retryCount, 30_000);
+      const delay = Math.min(
+        this.baseRetryDelay * 2 ** this.retryCount,
+        30_000,
+      );
       this.retryCount++;
-      log.info(`  🔄 scheduling auto-reconnect in ${delay}ms (attempt ${this.retryCount}/${this.maxRetries})`);
+      log.info(
+        `  🔄 scheduling auto-reconnect in ${delay}ms (attempt ${this.retryCount}/${this.maxRetries})`,
+      );
       this.reconnectTimer = setTimeout(() => {
         this.reconnect();
       }, delay);
     } else {
-      log.warn('  → max retries exhausted — no auto-reconnect');
+      log.warn("  → max retries exhausted — no auto-reconnect");
     }
   }
 
   public reconnect() {
-    log.info('🔄 reconnect() — cleaning up children and re-initializing');
+    log.info("🔄 reconnect() — cleaning up children and re-initializing");
     this.cleanupChildren();
     this.destroy();
-    const next = new PeerInitializingState(this.peer, this.maxRetries, this.baseRetryDelay, this.ctx);
+    const next = new PeerInitializingState(
+      this.peer,
+      this.maxRetries,
+      this.baseRetryDelay,
+      this.ctx,
+    );
     this.ctx.transition(next);
     this.peer.reconnect();
   }
 
   private onError = (error: PeerError<string>) => {
-    log.error('❌ PeerJS "error" while disconnected', error.type, error.message);
+    log.error(
+      '❌ PeerJS "error" while disconnected',
+      error.type,
+      error.message,
+    );
     if (isFatalError(error)) {
-      log.warn('  → fatal error — transitioning to error state');
+      log.warn("  → fatal error — transitioning to error state");
       this.cleanupChildren();
       this.destroy();
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
     }
-    this.ctx.emit({ type: 'peer.error', error });
+    this.ctx.emit({ type: "peer.error", error });
   };
 
   private onClose = () => {
@@ -355,39 +565,49 @@ export class PeerDisconnectedState implements BasePeerState {
   };
 
   private cleanupChildren() {
-    log.debug(`  cleaning up ${this.connections.size} connection(s) and ${this.calls.size} call(s)`);
+    log.debug(
+      `  cleaning up ${this.connections.size} connection(s) and ${this.calls.size} call(s)`,
+    );
     for (const conn of this.connections.values()) {
-      try { conn.destroy(); } catch { /* ignore */ }
+      try {
+        conn.destroy();
+      } catch {
+        /* ignore */
+      }
     }
     for (const call of this.calls.values()) {
-      try { call.destroy(); } catch { /* ignore */ }
+      try {
+        call.destroy();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
   public destroy() {
-    log.debug('  PeerDisconnectedState.destroy()');
+    log.debug("  PeerDisconnectedState.destroy()");
     clearTimeout(this.reconnectTimer);
-    this.peer.off('error', this.onError);
-    this.peer.off('close', this.onClose);
+    this.peer.off("error", this.onError);
+    this.peer.off("close", this.onClose);
   }
 }
 
 // ── Terminal States ──────────────────────────────────────────────────────────
 
 export class PeerErrorState implements BasePeerState {
-  public readonly _tag = 'error';
+  public readonly _tag = "error";
   constructor(public readonly lastError: PeerError<string>) {
-    log.error('💀 PeerErrorState created', lastError.type, lastError.message);
+    log.error("💀 PeerErrorState created", lastError.type, lastError.message);
   }
-  public destroy() { }
+  public destroy() {}
 }
 
 export class PeerDestroyedState implements BasePeerState {
-  public readonly _tag = 'destroyed';
+  public readonly _tag = "destroyed";
   constructor() {
-    log.info('💀 PeerDestroyedState created');
+    log.info("💀 PeerDestroyedState created");
   }
-  public destroy() { }
+  public destroy() {}
 }
 
 // ── Union ────────────────────────────────────────────────────────────────────

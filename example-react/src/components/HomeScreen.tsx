@@ -38,7 +38,6 @@ export function HomeScreen({ peerState }: { peerState: PeerReadyState; }) {
     // Call requires a local stream — media must be active
     if (mediaState._tag === 'active') {
       peerState.call(id, mediaState.stream);
-      peerState.connect(id);
     }
   };
 
