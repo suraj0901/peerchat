@@ -1,7 +1,22 @@
 import { createLogger, type Logger } from './logger';
+import type { MediaConnection } from 'peerjs';
+import type { CallDirection } from '../call/state';
 
 export interface MachineContext<S> {
   transition: (nextState: S) => void;
+}
+
+export interface MachineFactory<S, C = {}> {
+  create(context: MachineContext<S>, config?: C): S;
+}
+
+export interface CallMachineFactory {
+  create(config: {
+    call: MediaConnection;
+    callId: string;
+    remotePeerId: string;
+    direction: CallDirection;
+  }): unknown;
 }
 
 export abstract class AbstractMachine<S extends { destroy(): void }, E extends { type: string } = never> {

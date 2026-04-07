@@ -4,6 +4,7 @@ import type { CallDirection, CallState } from './state';
 import { SignalingService } from '../signaling';
 import { ConnectionMachine } from '../connection/ConnectionMachine';
 import { createLogger } from '../core/logger';
+import type { CallMachineFactory } from '../core/machine';
 
 const log = createLogger('CallCoordinator');
 
@@ -28,25 +29,38 @@ export class CallCoordinator {
   private remotePeerId: string;
   private readonly config: CallCoordinatorConfig;
 
-  constructor(config: CallCoordinatorConfig) {
+  constructor(
+    config: CallCoordinatorConfig,
+    callMachineFactory?: CallMachineFactory,
+  ) {
     this.config = config;
     this.callId = config.callId;
     this.remotePeerId = config.remotePeerId;
     log.info(`🔧 CallCoordinator created — ${config.direction} call "${this.callId}" with "${this.remotePeerId}"`);
 
-    this.callMachine = new CallMachine(
-      config.call,
-      config.callId,
-      config.remotePeerId,
-      config.direction,
-      (reason, callId) => {
-        if (reason === 'rejected') {
-          config.signalingService.sendCallRejected(callId, this.remotePeerId);
-        } else {
-          config.signalingService.sendCallDeclined(callId, this.remotePeerId);
-        }
-      },
-    );
+    const defaultFactory: CallMachineFactory = {
+      create: (cfg) => new CallMachine(
+        cfg.call,
+        cfg.callId,
+        cfg.remotePeerId,
+        cfg.direction,
+        (reason, callId) => {
+          if (reason === 'rejected') {
+            config.signalingService.sendCallRejected(callId, this.remotePeerId);
+          } else {
+            config.signalingService.sendCallDeclined(callId, this.remotePeerId);
+          }
+        },
+      ),
+    };
+
+    const factory = callMachineFactory ?? defaultFactory;
+    this.callMachine = factory.create({
+      call: config.call,
+      callId: config.callId,
+      remotePeerId: config.remotePeerId,
+      direction: config.direction,
+    }) as CallMachine;
 
     this.setupParallelConnection();
     this.setupTransitionHandler();
