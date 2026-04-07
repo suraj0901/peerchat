@@ -50,6 +50,12 @@ export function ReadyApp({ state }: { state: PeerReadyState }) {
       manager.on('call.error', (e) => {
         addNotification('error', 'Call Error', e.error.message);
       }),
+      manager.on('call.declined', () => {
+        addNotification('info', 'Call Declined', 'Your call was declined.');
+      }),
+      manager.on('call.rejected', () => {
+        addNotification('info', 'Call Rejected', 'Your call was rejected (busy).');
+      })
     ];
     return () => unsubs.forEach((s) => s.unsubscribe());
   }, [manager, media, addNotification]);
@@ -59,12 +65,12 @@ export function ReadyApp({ state }: { state: PeerReadyState }) {
   let ringingCallEntry: [string, AnyMachine<CallState>] | null = null;
 
   for (const [id, machine] of state.calls) {
-    const s = machine.getState();
+    const s = machine.callMachine.getState();
     if (s._tag === 'live' || s._tag === 'connecting') {
-      liveCallEntry = [id, machine];
+      liveCallEntry = [id, machine.callMachine];
     }
     if (s._tag === 'ringing') {
-      ringingCallEntry = [id, machine];
+      ringingCallEntry = [id, machine.callMachine];
     }
   }
 
