@@ -2,6 +2,11 @@ import type { PeerError } from 'peerjs';
 
 // ── Emitted Events ────────────────────────────────────────────────────────────
 
+export type DataConnectionMessage =
+  | { type: 'remote_close'; callId: string }
+  | { type: 'call_rejected'; callId: string }
+  | { type: 'call_declined'; callId: string };
+
 export type PeerEmittedEvent =
   | { type: 'peer.ready'; peerId: string }
   | { type: 'peer.disconnected' }
@@ -13,7 +18,9 @@ export type PeerEmittedEvent =
   | { type: 'call.incoming'; callId: string; remotePeerId: string }
   | { type: 'call.active'; callId: string; remotePeerId: string; remoteStream: MediaStream }
   | { type: 'call.ended'; callId: string }
-  | { type: 'call.error'; callId: string; error: Error | PeerError<string> };
+  | { type: 'call.error'; callId: string; error: Error | PeerError<string> }
+  | { type: 'call.rejected'; callId: string; remotePeerId: string }
+  | { type: 'call.declined'; callId: string; remotePeerId: string };
 
 // ── Error Helpers ─────────────────────────────────────────────────────────────
 

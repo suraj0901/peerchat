@@ -12,12 +12,14 @@ export class CallMachine extends AbstractMachine<CallState> {
     callId: string,
     remotePeerId: string,
     direction: CallDirection,
+    sendRemoteCallEndedMessage?: (reason: 'rejected' | 'declined', callId: string) => void,
   ) {
     super();
 
     this.log.info(`🔧 CallMachine created — ${direction} call "${callId}" with "${remotePeerId}"`);
 
     const ctx = this.createContext<CallContext>();
+    ctx.sendRemoteCallEndedMessage = sendRemoteCallEndedMessage ?? (() => {});
 
     if (direction === 'inbound') {
       this.currentState = new CallRingingState(call, callId, remotePeerId, ctx);

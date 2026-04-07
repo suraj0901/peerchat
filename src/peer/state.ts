@@ -254,6 +254,20 @@ export class PeerReadyState implements BasePeerState {
     return null;
   }
 
+  private sendRemoteCallEndedMessage(
+    reason: "rejected" | "declined",
+    callId: string,
+    remotePeerId: string
+  ) {
+    const connection = this.getConnection(remotePeerId);
+    if (connection) {
+      connection.send({
+        type: reason === "rejected" ? "call_rejected" : "call_declined",
+        callId,
+      });
+    }
+  }
+
   // ── PeerJS callbacks ─────────────────────────────────────────────────────
 
   private onConnection = (connection: DataConnection) => {
@@ -357,6 +371,28 @@ export class PeerReadyState implements BasePeerState {
           });
           return;
         }
+        if (event?.type === "call_rejected") {
+          console.error(
+            `  received call_rejected for callId ${event.callId} on connection ${id} — notifying UI`,
+          );
+          this.removeCall(event.callId, {
+            type: "call.rejected",
+            callId: event.callId,
+            remotePeerId: id,
+          });
+          return;
+        }
+        if (event?.type === "call_declined") {
+          console.error(
+            `  received call_declined for callId ${event.callId} on connection ${id} — notifying UI`,
+          );
+          this.removeCall(event.callId, {
+            type: "call.declined",
+            callId: event.callId,
+            remotePeerId: id,
+          });
+          return;
+        }
         this.ctx.emit({ type: "connection.data", connectionId: id, data });
       },
     );
@@ -411,7 +447,13 @@ export class PeerReadyState implements BasePeerState {
     log.debug(
       `  spawning CallMachine for "${remotePeerId}" (id: ${callId}, direction: ${direction})`,
     );
-    const machine = new CallMachine(call, callId, remotePeerId, direction);
+    const machine = new CallMachine(
+      call,
+      callId,
+      remotePeerId,
+      direction,
+      (reason, callId) => this.sendRemoteCallEndedMessage(reason, callId, remotePeerId),
+    );
 
     machine.onTransition((next, prev) => {
       log.info(
