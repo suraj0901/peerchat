@@ -21,4 +21,6 @@ export type { MediaMode, PermissionState, MediaPermissions } from './media/state
 // ── Call / Connection types ───────────────────────────────────────────────────
 
 export type { CallState } from './call/state';
+export type { CallEmittedEvent } from './call/types';
 export type { ConnectionState } from './connection/state';
+export type { ConnectionEmittedEvent } from './connection/types';
