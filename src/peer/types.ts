@@ -1,12 +1,5 @@
 import type { PeerError } from 'peerjs';
 
-// ── Emitted Events ────────────────────────────────────────────────────────────
-
-export type DataConnectionMessage =
-  | { type: 'remote_close'; callId: string }
-  | { type: 'call_rejected'; callId: string }
-  | { type: 'call_declined'; callId: string };
-
 export type PeerEmittedEvent =
   | { type: 'peer.ready'; peerId: string }
   | { type: 'peer.disconnected' }

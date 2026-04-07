@@ -5,6 +5,7 @@ import type { MachineContext } from "../core";
 import { createLogger } from "../core/logger";
 import { isFatalError, type PeerEmittedEvent } from "./types";
 import type { CallState } from "../call";
+import { SignalingService } from "../signaling";
 
 const log = createLogger("peer");
 
@@ -126,6 +127,7 @@ export class PeerInitializingState implements BasePeerState {
 
 export class PeerReadyState implements BasePeerState {
   public readonly _tag = "ready";
+  private readonly signalingService: SignalingService;
 
   constructor(
     public readonly peer: Peer,
@@ -137,6 +139,11 @@ export class PeerReadyState implements BasePeerState {
     private ctx: PeerContext,
   ) {
     log.info(`✅ PeerReadyState created — peerId: ${peerId}`);
+    this.signalingService = new SignalingService({
+      getConnection: (remotePeerId) => this.getConnection(remotePeerId),
+      emit: (event) => this.ctx.emit(event),
+      notifyChange: () => this.ctx.notifyChange(),
+    });
     this.peer.on("connection", this.onConnection);
     this.peer.on("call", this.onIncomingCall);
     this.peer.on("disconnected", this.onDisconnected);
@@ -213,6 +220,45 @@ export class PeerReadyState implements BasePeerState {
     callMachine: CallMachine,
   ) {
     let connection = this.getConnection(remotePeerId);
+    const callId = callMachine.getState().callId;
+    
+    const onCallEnded = (message: { type: string; callId: string }, connectionId: string) => {
+      if (message.type === 'remote_close') {
+        console.error(
+          `  received remote_close for callId ${message.callId} on connection ${connectionId} — closing associated call`,
+        );
+        this.removeCall(message.callId, {
+          type: "call.ended",
+          callId: message.callId,
+        });
+        return;
+      }
+      if (message.type === 'call_rejected') {
+        console.error(
+          `  received call_rejected for callId ${message.callId} on connection ${connectionId} — notifying UI`,
+        );
+        this.removeCall(message.callId, {
+          type: "call.rejected",
+          callId: message.callId,
+          remotePeerId: connectionId,
+        });
+        return;
+      }
+      if (message.type === 'call_declined') {
+        console.error(
+          `  received call_declined for callId ${message.callId} on connection ${connectionId} — notifying UI`,
+        );
+        this.removeCall(message.callId, {
+          type: "call.declined",
+          callId: message.callId,
+          remotePeerId: connectionId,
+        });
+        return;
+      }
+    };
+    
+    this.signalingService.registerHandler(callId, onCallEnded);
+
     if (!connection) {
       console.log(`  no existing connection to "${remotePeerId}" found for call ${callMachine.getState().callId} — creating parallel connection`);
       this.connect(remotePeerId);
@@ -221,10 +267,12 @@ export class PeerReadyState implements BasePeerState {
         if (connectionId) {
           this.removeConnection(connectionId);
         }
+        this.signalingService.unregisterHandler(callId);
       });
     }else {
       callMachine.onTransition((state) => {
         this.sendRemoteCloseMessage(state, remotePeerId);
+        this.signalingService.unregisterHandler(callId);
       });
     }
   }
@@ -246,7 +294,7 @@ export class PeerReadyState implements BasePeerState {
     const connection = this.getConnection(remotePeerId);
     if (connection) {
       console.log("sending remote_close")
-      connection.send({ type: "remote_close", callId: state.callId });
+      this.signalingService.sendRemoteClose(state.callId, remotePeerId);
       return connection.connectionId;
     }else {
       console.log("no open connection found to send remote_close message")
@@ -259,12 +307,10 @@ export class PeerReadyState implements BasePeerState {
     callId: string,
     remotePeerId: string
   ) {
-    const connection = this.getConnection(remotePeerId);
-    if (connection) {
-      connection.send({
-        type: reason === "rejected" ? "call_rejected" : "call_declined",
-        callId,
-      });
+    if (reason === "rejected") {
+      this.signalingService.sendCallRejected(callId, remotePeerId);
+    } else {
+      this.signalingService.sendCallDeclined(callId, remotePeerId);
     }
   }
 
@@ -361,36 +407,8 @@ export class PeerReadyState implements BasePeerState {
       remotePeerId,
       (id, data) => {
         const event = data as { type: string; callId: string };
-        if (event?.type === "remote_close") {
-          console.error(
-            `  received remote_close for callId ${event.callId} on connection ${id} — closing associated call`,
-          );
-          this.removeCall(event.callId, {
-            type: "call.ended",
-            callId: event.callId,
-          });
-          return;
-        }
-        if (event?.type === "call_rejected") {
-          console.error(
-            `  received call_rejected for callId ${event.callId} on connection ${id} — notifying UI`,
-          );
-          this.removeCall(event.callId, {
-            type: "call.rejected",
-            callId: event.callId,
-            remotePeerId: id,
-          });
-          return;
-        }
-        if (event?.type === "call_declined") {
-          console.error(
-            `  received call_declined for callId ${event.callId} on connection ${id} — notifying UI`,
-          );
-          this.removeCall(event.callId, {
-            type: "call.declined",
-            callId: event.callId,
-            remotePeerId: id,
-          });
+        if (event?.type === "remote_close" || event?.type === "call_rejected" || event?.type === "call_declined") {
+          this.signalingService.handleMessage(id, event as any);
           return;
         }
         this.ctx.emit({ type: "connection.data", connectionId: id, data });
