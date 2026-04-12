@@ -56,5 +56,8 @@ Object.defineProperty(navigator, 'mediaDevices', {
   value: {
     getUserMedia: vi.fn().mockImplementation(() => Promise.resolve(new MockMediaStream())),
     enumerateDevices: vi.fn().mockImplementation(() => Promise.resolve([])),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
   },
 });
