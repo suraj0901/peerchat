@@ -4,7 +4,16 @@ import type { CallDirection, CallState } from './state';
 import { SignalingService } from '../signaling';
 import { ConnectionMachine } from '../connection/ConnectionMachine';
 import { createLogger } from '../core/logger';
-import type { CallMachineFactory } from '../core/machine';
+
+/** Factory interface for creating CallMachine instances (used for DI / testing). */
+export interface CallMachineFactory {
+  create(config: {
+    call: MediaConnection;
+    callId: string;
+    remotePeerId: string;
+    direction: CallDirection;
+  }): CallMachine;
+}
 
 const log = createLogger('CallCoordinator');
 
