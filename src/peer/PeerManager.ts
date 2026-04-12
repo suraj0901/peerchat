@@ -333,6 +333,33 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   // ── Query Methods (Immutable Snapshots) ─────────────────────────────────────
 
   /**
+   * Returns true when there are held calls but no live call.
+   * The UI should show a call picker when this is true.
+   */
+  get needsCallSelection(): boolean {
+    const state = this.getState();
+    if (state._tag !== 'ready') return false;
+
+    let hasLive = false;
+    let hasHeld = false;
+
+    for (const coordinator of state.calls.values()) {
+      const tag = coordinator.callMachine.getState()._tag;
+      if (tag === 'live') hasLive = true;
+      if (tag === 'held') hasHeld = true;
+    }
+
+    return !hasLive && hasHeld;
+  }
+
+  /**
+   * Get only the held calls. Useful for rendering a call picker.
+   */
+  getHeldCalls(): readonly CallInfo[] {
+    return this.getActiveCalls().filter(c => c.state === 'held');
+  }
+
+  /**
    * Get an immutable snapshot of all active calls.
    */
   getActiveCalls(): readonly CallInfo[] {

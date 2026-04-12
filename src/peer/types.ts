@@ -17,7 +17,8 @@ export type PeerEmittedEvent =
   | { type: 'call.held'; callId: string; remotePeerId: string }
   | { type: 'call.resumed'; callId: string; remotePeerId: string }
   | { type: 'call.remoteHeld'; callId: string; remotePeerId: string }
-  | { type: 'call.remoteResumed'; callId: string; remotePeerId: string };
+  | { type: 'call.remoteResumed'; callId: string; remotePeerId: string }
+  | { type: 'call.selectionRequired'; heldCallIds: string[] };
 
 // ── Error Helpers ─────────────────────────────────────────────────────────────
 

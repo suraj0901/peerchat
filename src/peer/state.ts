@@ -432,6 +432,29 @@ export class PeerReadyState implements BasePeerState {
     this.ctx.bumpVersion();
     this.ctx.notifyChange();
     if (event) this.ctx.emit(event);
+
+    // After removing a call, check if held calls remain with no live call
+    this.emitSelectionRequiredIfNeeded();
+  }
+
+  /**
+   * Emit `call.selectionRequired` when there are held calls but no live call.
+   * This signals the UI to show a call picker.
+   */
+  private emitSelectionRequiredIfNeeded() {
+    let hasLive = false;
+    const heldCallIds: string[] = [];
+
+    for (const [id, coord] of this.calls) {
+      const tag = coord.callMachine.getState()._tag;
+      if (tag === 'live') hasLive = true;
+      if (tag === 'held') heldCallIds.push(id);
+    }
+
+    if (!hasLive && heldCallIds.length > 0) {
+      log.info(`  📋 selectionRequired — ${heldCallIds.length} held call(s), no live call`);
+      this.ctx.emit({ type: 'call.selectionRequired', heldCallIds });
+    }
   }
 
   private cleanupChildren() {
