@@ -79,8 +79,11 @@ PeerChat is built on three core principles:
 │  │  │ - ringing │  │  │ States:              │                   │
 │  │  │ - connect │  │  │  - connecting        │                   │
 │  │  │ - live    │  │  │  - open              │                   │
-│  │  │ - ended   │  │  │  - closed            │                   │
-│  │  │ - error   │  │  │  - error             │                   │
+│  │  │ - held    │  │  │  - closed            │                   │
+│  │  │ - remote- │  │  │  - error             │                   │
+│  │  │   Held    │  │  └──────────────────────┘                   │
+│  │  │ - ended   │  │                                              │
+│  │  │ - error   │  │                                              │
 │  │  └───────────┘  │  └──────────────────────┘                   │
 │  │                 │                                              │
 │  │ ┌────────────────────┐                                        │
@@ -210,6 +213,10 @@ export const CallEvents = {
   ERROR: 'call.error',
   REJECTED: 'call.rejected',
   DECLINED: 'call.declined',
+  HELD: 'call.held',
+  RESUMED: 'call.resumed',
+  REMOTE_HELD: 'call.remoteHeld',
+  REMOTE_RESUMED: 'call.remoteResumed',
 } as const;
 
 export const ConnectionEvents = {
@@ -269,10 +276,12 @@ The top-level machine managing the PeerJS lifecycle, data connections, and calls
 PeerManager adds convenience methods that narrow state and delegate to state commands:
 
 ```typescript
-call(remotePeerId: string, options?: CallOptions): boolean
-answer(callId: string, options?: AnswerOptions): boolean
+call(remotePeerId: string, options?: CallOptions): boolean  // Blocked if a live call exists
+answer(callId: string, options?: AnswerOptions): boolean     // Auto-holds any live call
 reject(callId: string): boolean
-hangUp(callId: string): boolean
+hangUp(callId: string): boolean                              // Works from live, connecting, held, remoteHeld
+hold(callId: string): boolean                                // Put a live call on hold
+resume(callId: string): boolean                              // Resume a held call (auto-holds live)
 send(remotePeerId: string, data: unknown): boolean
 connect(remotePeerId: string): void
 attachMedia(media: MediaMachine): void
@@ -346,9 +355,21 @@ Manages a single call's lifecycle. Created by CallCoordinator.
 |-------|--------|-------------|----------|
 | `CallRingingState` | `ringing` | Call incoming/outgoing, waiting for answer | `answer(stream)`, `reject()` |
 | `CallConnectingState` | `connecting` | WebRTC negotiation in progress | `hangUp()` |
-| `CallLiveState` | `live` | Call is active | `hangUp()` |
+| `CallLiveState` | `live` | Call is active | `hangUp()`, `hold()`, `remoteHeld()` |
+| `CallHeldState` | `held` | Call held by local user (tracks disabled, connection alive) | `resume()`, `hangUp()` |
+| `CallRemoteHeldState` | `remoteHeld` | Call held by remote peer (tracks disabled, connection alive) | `remoteResumed()`, `hangUp()` |
 | `CallEndedState` | `ended` | Call ended normally | — |
 | `CallErrorState` | `error` | Call ended due to error | — |
+
+#### Hold Mechanism
+
+"Hold" is implemented at the **track level**:
+- **Local outgoing tracks** are disabled via `(call as any).peerConnection.getSenders()` → `sender.track.enabled = false`
+- **Remote incoming tracks** are disabled on the `remoteStream` → `track.enabled = false`
+- The **WebRTC connection stays alive** (ICE candidates, keep-alives maintained)
+- **Resume** re-enables all tracks — near-instant, no renegotiation needed
+
+Helper functions `disableLocalTracks()` and `enableLocalTracks()` in `src/call/state.ts` encapsulate the PeerJS internal access.
 
 ### ConnectionMachine
 
@@ -391,7 +412,9 @@ Peer A                         Peer B
   │         │                    │
   │         ├─ remote_close ────▶│
   │         ├─ call_rejected ───▶│
-  │         └─ call_declined ───▶│
+  │         ├─ call_declined ───▶│
+  │         ├─ call_held ───────▶│  (notifies remote of hold)
+  │         └─ call_resumed ───▶│  (notifies remote of resume)
   │                              │
 ```
 
@@ -405,6 +428,10 @@ Handles:
 - `remote_close` — notify the other side that a call is closing
 - `call_rejected` — notify that a call was rejected (timeout)
 - `call_declined` — notify that a call was actively declined
+- `call_held` — notify the remote peer that the local user put the call on hold
+- `call_resumed` — notify the remote peer that the local user resumed the call
+
+When a `call_held` message is received, the `CallCoordinator` triggers `remoteHeld()` on the `CallLiveState`, transitioning to `CallRemoteHeldState`. When `call_resumed` is received, `remoteResumed()` is called on `CallRemoteHeldState`, transitioning back to `CallLiveState`.
 
 ---
 

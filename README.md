@@ -2,7 +2,7 @@
 
 A composable, state-machine-driven wrapper around [PeerJS](https://peerjs.com/) for video calls, data channels, and media management.
 
-- 🔊 **Video & audio calls** — answer, reject, hang up, with timeout handling
+- 🔊 **Video & audio calls** — answer, reject, hang up, hold/resume, with timeout handling
 - 💬 **Data channels** — real-time messaging with typed events
 - 🎥 **Media management** — camera/mic acquisition, device switching, screen sharing, permission monitoring
 - 🔄 **State machine architecture** — every resource is a machine with typed, discriminated-union states
@@ -56,6 +56,10 @@ peer.send('friend-id', { type: 'chat', text: 'Hello!' });
 peer.on(CallEvents.ACTIVE, ({ callId, remoteStream }) => {
   videoElement.srcObject = remoteStream;
 });
+
+// Hold and resume calls
+peer.hold(callId);   // Put current call on hold
+peer.resume(callId); // Resume a held call
 
 // Hang up
 peer.hangUp(callId);
@@ -125,18 +129,26 @@ peer.connect('remote-id');
 peer.send('remote-id', { text: 'hello' });
 
 // Make a call (uses attached media or provided stream)
+// Blocked if a live call already exists — hold or hang up first
 peer.call('remote-id');
 peer.call('remote-id', { stream: myStream });
 
 // Answer an incoming call
+// Automatically puts any live call on hold
 peer.answer(callId);
 peer.answer(callId, { stream: myStream });
 
 // Reject an incoming call
 peer.reject(callId);
 
-// Hang up an active call
+// Hang up an active call (works from live, connecting, held, or remoteHeld)
 peer.hangUp(callId);
+
+// Hold a live call (disables media tracks, keeps connection alive)
+peer.hold(callId);
+
+// Resume a held call (automatically holds any other live call)
+peer.resume(callId);
 
 // Attach/detach media
 peer.attachMedia(media);
@@ -148,7 +160,7 @@ peer.detachMedia();
 ```ts
 // Get all active calls
 const calls = peer.getActiveCalls();
-// → [{ callId, remotePeerId, state: 'live' | 'ringing' | ..., direction: 'inbound' | 'outbound' }]
+// → [{ callId, remotePeerId, state: 'live' | 'ringing' | 'held' | 'remoteHeld' | ..., direction: 'inbound' | 'outbound' }]
 
 // Get all connections
 const connections = peer.getActiveConnections();
@@ -247,6 +259,10 @@ const peer = new PeerManager({
 | `call.error` | `{ callId, error }` |
 | `call.rejected` | `{ callId, remotePeerId }` |
 | `call.declined` | `{ callId, remotePeerId }` |
+| `call.held` | `{ callId, remotePeerId }` |
+| `call.resumed` | `{ callId, remotePeerId }` |
+| `call.remoteHeld` | `{ callId, remotePeerId }` |
+| `call.remoteResumed` | `{ callId, remotePeerId }` |
 
 ### `MediaMachine`
 
@@ -295,7 +311,9 @@ const media = new MediaMachine();
 |---|---|
 | `ringing` | `answer(localStream)`, `reject()` |
 | `connecting` | `hangUp()` |
-| `live` | `hangUp()` |
+| `live` | `hangUp()`, `hold()`, `remoteHeld()` |
+| `held` | `resume()`, `hangUp()` |
+| `remoteHeld` | `remoteResumed()`, `hangUp()` |
 | `ended` | — |
 | `error` | — |
 
@@ -367,6 +385,31 @@ The 0.2.0 API is **backward compatible**. All existing code using `new PeerManag
 | Child machine access | `peer.getCallMachine(callId)`, `peer.getConnectionMachine(connectionId)` |
 | React snapshots | `peer.getSnapshot()` returns `{ state, version }` |
 | Exported classes | `CallMachine`, `ConnectionMachine` now exported |
+
+### ⚠️ Breaking Change: New Call States
+
+The `CallState` type union now includes `CallHeldState` (`_tag: 'held'`) and `CallRemoteHeldState` (`_tag: 'remoteHeld'`). If your code does exhaustive matching on `CallState['_tag']`, you must handle these new cases.
+
+**New Convenience Methods:**
+
+| Method | Description |
+|---|---|
+| `peer.hold(callId)` | Put a live call on hold |
+| `peer.resume(callId)` | Resume a held call (auto-holds any live call) |
+
+**New Call Events:**
+
+| Event | When |
+|---|---|
+| `call.held` | Local user put a call on hold |
+| `call.resumed` | Local user resumed a held call |
+| `call.remoteHeld` | Remote peer put you on hold |
+| `call.remoteResumed` | Remote peer resumed the call |
+
+**Behavioral Changes:**
+- `call()` is now **blocked** if a live call already exists (returns `false`)
+- `answer()` now **auto-holds** any existing live call before answering
+- `hangUp()` now works from `held` and `remoteHeld` states too
 
 ## License
 

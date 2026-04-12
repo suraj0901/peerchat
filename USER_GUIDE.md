@@ -17,6 +17,7 @@ A comprehensive guide to using PeerChat in your applications.
   - [Creating Media](#creating-media)
   - [Making Calls](#making-calls)
   - [Handling Incoming Calls](#handling-incoming-calls)
+  - [Call Hold / Resume](#call-hold--resume)
   - [Sending Messages](#sending-messages)
   - [Managing Media](#managing-media)
 - [Advanced API Reference](#advanced-api-reference)
@@ -33,6 +34,7 @@ A comprehensive guide to using PeerChat in your applications.
   - [Media Events](#media-events)
 - [Common Patterns](#common-patterns)
   - [Video Call with Auto Answer](#video-call-with-auto-answer)
+  - [Call Hold / Resume](#call-hold--resume-1)
   - [Chat-Only with Data Channels](#chat-only-with-data-channels)
   - [Screen Sharing](#screen-sharing)
   - [Device Switching](#device-switching)
@@ -149,15 +151,20 @@ The **Media** component handles local media streams. It manages:
 A **Call** is a WebRTC media connection between two peers. Calls have a lifecycle:
 
 ```
-Incoming Call:  ringing ──answer──▶ connecting ──connected──▶ live ──hangup──▶ ended
-Outgoing Call:  ringing ──answer──▶ connecting ──connected──▶ live ──hangup──▶ ended
+Incoming:  ringing ──answer──▶ connecting ──stream──▶ live ──hangup──▶ ended
+Outgoing:              connecting ──stream──▶ live ──hangup──▶ ended
+
+Hold/Resume:  live ──hold()──▶ held ──resume()──▶ live
+Remote Hold:  live ──signal──▶ remoteHeld ──signal──▶ live
 ```
 
 Each call has:
 - A unique `callId`
 - A `remotePeerId` — the other party
 - A `direction` — `'inbound'` or `'outbound'`
-- A state — `'ringing'`, `'connecting'`, `'live'`, `'ended'`, or `'error'`
+- A state — `'ringing'`, `'connecting'`, `'live'`, `'held'`, `'remoteHeld'`, `'ended'`, or `'error'`
+
+**Only one call can be `live` at a time.** When you answer a second call, the first is automatically put on hold. Outbound calls are blocked if a live call already exists.
 
 ### Data Channels
 
@@ -234,6 +241,7 @@ const media = createMedia({ autoPermissions: false });
 
 ```ts
 // Call using attached media (must call peer.attachMedia(media) first)
+// Blocked if a live call already exists — hold or hang up first
 peer.call('friend-id');
 
 // Call with explicit stream
@@ -302,7 +310,19 @@ peer.on(CallEvents.ERROR, ({ callId, error }) => {
 peer.on(CallEvents.REJECTED, ({ callId, remotePeerId }) => {
   console.log(`${remotePeerId} rejected the call`);
 });
+
+// Call put on hold by remote peer
+peer.on(CallEvents.REMOTE_HELD, ({ callId, remotePeerId }) => {
+  console.log(`${remotePeerId} put you on hold`);
+});
+
+// Call resumed by remote peer
+peer.on(CallEvents.REMOTE_RESUMED, ({ callId, remotePeerId }) => {
+  console.log(`${remotePeerId} resumed the call`);
+});
 ```
+
+> **Note:** `answer()` automatically holds any currently live call before answering the new one.
 
 #### `answer(callId, options?)`
 
@@ -329,7 +349,69 @@ interface AnswerOptions {
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `callId` | `string` | The active call ID to hang up |
+| `callId` | `string` | The active call ID to hang up (`live`, `connecting`, `held`, or `remoteHeld`) |
+
+### Call Hold / Resume
+
+PeerChat enforces a **single active call** policy. Only one call can be in the `live` state at any time.
+
+```ts
+import { CallEvents } from 'peerchat';
+
+// Put a live call on hold
+peer.hold(callId);
+// Disables media tracks on both sides, but keeps the WebRTC connection alive.
+// The remote peer receives a 'call.remoteHeld' event.
+
+// Resume a held call
+peer.resume(callId);
+// Re-enables media tracks. Any currently live call is auto-held first.
+// The remote peer receives a 'call.remoteResumed' event.
+
+// Listen for hold/resume events
+peer.on(CallEvents.HELD, ({ callId, remotePeerId }) => {
+  console.log(`Call ${callId} is now on hold`);
+});
+
+peer.on(CallEvents.RESUMED, ({ callId, remotePeerId }) => {
+  console.log(`Call ${callId} is now live again`);
+});
+
+peer.on(CallEvents.REMOTE_HELD, ({ callId, remotePeerId }) => {
+  console.log(`${remotePeerId} put you on hold`);
+  // Your UI should show "On Hold" state. You cannot resume — only the remote peer can.
+});
+
+peer.on(CallEvents.REMOTE_RESUMED, ({ callId, remotePeerId }) => {
+  console.log(`${remotePeerId} resumed the call`);
+});
+```
+
+#### `hold(callId)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `callId` | `string` | The live call ID to put on hold |
+
+Returns `true` if the call was held, `false` if not found or not in `live` state.
+
+#### `resume(callId)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `callId` | `string` | The held call ID to resume |
+
+Returns `true` if the call was resumed, `false` if not found or not in `held` state.
+
+> **Important:** `resume()` automatically holds any currently live call before resuming the target call.
+
+#### Automatic Hold Behavior
+
+| Scenario | What Happens |
+|---|---|
+| Already in a live call, accept a new incoming call | The existing live call is auto-held |
+| Already in a live call, try to make an outbound call | `call()` returns `false` (blocked) |
+| Resume a held call while another call is live | The live call is auto-held, then the target is resumed |
 
 ### Sending Messages
 
@@ -479,6 +561,10 @@ import { CallEvents } from 'peerchat';
 | `call.error` | `CallEvents.ERROR` | `{ callId, error }` | Call error occurred |
 | `call.rejected` | `CallEvents.REJECTED` | `{ callId, remotePeerId }` | Remote peer rejected (timeout) |
 | `call.declined` | `CallEvents.DECLINED` | `{ callId, remotePeerId }` | Remote peer declined |
+| `call.held` | `CallEvents.HELD` | `{ callId, remotePeerId }` | Local user put call on hold |
+| `call.resumed` | `CallEvents.RESUMED` | `{ callId, remotePeerId }` | Local user resumed a held call |
+| `call.remoteHeld` | `CallEvents.REMOTE_HELD` | `{ callId, remotePeerId }` | Remote peer put you on hold |
+| `call.remoteResumed` | `CallEvents.REMOTE_RESUMED` | `{ callId, remotePeerId }` | Remote peer resumed the call |
 
 ### Connection Events
 
@@ -539,6 +625,52 @@ peer.on(CallEvents.ACTIVE, ({ remoteStream }) => {
 peer.on(CallEvents.ENDED, () => {
   videoElement.srcObject = null;
 });
+```
+
+### Call Hold / Resume
+
+```ts
+import { createPeer, createMedia, CallEvents } from 'peerchat';
+
+const peer = createPeer();
+const media = createMedia();
+peer.attachMedia(media);
+
+// Accept a second call while on a live call — first call auto-held
+peer.on(CallEvents.INCOMING, ({ callId }) => {
+  peer.answer(callId); // Existing live call is automatically held
+});
+
+// Show held state in UI
+peer.on(CallEvents.HELD, ({ callId }) => {
+  console.log(`Call ${callId} is now on hold`);
+  // Update UI to show held indicator
+});
+
+// Show when remote peer puts you on hold
+peer.on(CallEvents.REMOTE_HELD, ({ callId, remotePeerId }) => {
+  console.log(`${remotePeerId} put you on hold`);
+  // Show "You are on hold" UI
+});
+
+peer.on(CallEvents.REMOTE_RESUMED, ({ callId }) => {
+  console.log(`Call ${callId} resumed by remote`);
+  // Remove "on hold" UI
+});
+
+// Manual hold/resume
+function holdCall(callId: string) {
+  peer.hold(callId);
+}
+
+function resumeCall(callId: string) {
+  peer.resume(callId); // Any other live call is auto-held
+}
+
+// Switch between calls: resume call A (auto-holds call B)
+function switchToCall(callId: string) {
+  peer.resume(callId);
+}
 ```
 
 ### Chat-Only with Data Channels
@@ -723,7 +855,7 @@ if (state.is('destroyed')) {
 
 The `is()` method is available on all state types:
 - **Peer states**: `'initializing'`, `'ready'`, `'disconnected'`, `'error'`, `'destroyed'`
-- **Call states**: `'ringing'`, `'connecting'`, `'live'`, `'ended'`, `'error'`
+- **Call states**: `'ringing'`, `'connecting'`, `'live'`, `'held'`, `'remoteHeld'`, `'ended'`, `'error'`
 - **Connection states**: `'connecting'`, `'open'`, `'closed'`, `'error'`
 - **Media states**: `'idle'`, `'checkingPermissions'`, `'requesting'`, `'active'`, `'switching'`, `'recovering'`, `'denied'`
 
@@ -794,6 +926,8 @@ type CallState =
   | CallRingingState     // Inbound call waiting for answer
   | CallConnectingState  // Call answered, waiting for stream
   | CallLiveState        // Call is active with remote stream
+  | CallHeldState        // Call held by local user
+  | CallRemoteHeldState  // Call held by remote peer
   | CallEndedState       // Call ended normally
   | CallErrorState;      // Call ended due to error
 ```
@@ -836,6 +970,42 @@ if (callState.is('live')) {
   
   // Methods
   callState.hangUp();
+  callState.hold();       // Put on hold → CallHeldState
+  callState.remoteHeld(); // Remote initiated hold → CallRemoteHeldState (internal)
+}
+```
+
+#### CallHeldState (`_tag: 'held'`)
+
+The local user has put this call on hold. Media tracks are disabled but the WebRTC connection is alive.
+
+```ts
+if (callState.is('held')) {
+  callState.callId;
+  callState.remotePeerId;
+  callState.direction;
+  callState.remoteStream; // MediaStream (tracks disabled)
+  
+  // Methods
+  callState.resume();  // Resume → CallLiveState
+  callState.hangUp();  // End call → CallEndedState
+}
+```
+
+#### CallRemoteHeldState (`_tag: 'remoteHeld'`)
+
+The remote peer has put you on hold. Only the remote peer can resume.
+
+```ts
+if (callState.is('remoteHeld')) {
+  callState.callId;
+  callState.remotePeerId;
+  callState.direction;
+  callState.remoteStream; // MediaStream (tracks disabled)
+  
+  // Methods
+  callState.remoteResumed(); // Remote resumed → CallLiveState (triggered by signal)
+  callState.hangUp();        // End call → CallEndedState
 }
 ```
 
@@ -1138,7 +1308,11 @@ const peer = createPeer({
 
 ### How many simultaneous calls are supported?
 
-Theoretically unlimited, but practical limits depend on:
+PeerChat enforces a **single active call** policy — only one call can be in the `live` state at a time. However, you can have multiple calls in `held`, `remoteHeld`, `ringing`, or `connecting` states simultaneously.
+
+When you accept a second incoming call, the first is automatically put on hold. You can switch between held calls using `peer.resume(callId)`.
+
+Practical limits for total concurrent connections depend on:
 - **Browser** — Chrome supports ~256 concurrent WebRTC connections
 - **Bandwidth** — each video call uses 1-4 Mbps
 - **CPU** — encoding/decoding video is CPU-intensive
