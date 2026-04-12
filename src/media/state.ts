@@ -26,6 +26,8 @@ export interface MediaContext extends MachineContext<MediaState> {
 export interface BaseMediaState {
   readonly _tag: 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied';
   permissions: MediaPermissions;
+  /** Update permissions in-place. Used by the permission monitor. */
+  updatePermissions(permissions: MediaPermissions): void;
   destroy(): void;
   is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }>;
 }
@@ -71,6 +73,8 @@ export class MediaIdleState implements BaseMediaState {
     const next = new MediaCheckingPermissionsState(this.permissions, this.ctx);
     this.ctx.transition(next);
   }
+
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
 
   public destroy() { }
 
@@ -127,6 +131,8 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
       this.ctx.transition(next);
     }
   }
+
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
 
   public destroy() {
     this.aborted = true;
@@ -205,6 +211,8 @@ export class MediaRequestingState implements BaseMediaState {
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);
   }
+
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
 
   public destroy() {
     this.controller.abort();
@@ -326,6 +334,8 @@ export class MediaActiveState implements BaseMediaState {
     this.ctx.emit({ type: 'media.stream.stopped' });
   }
 
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
+
   public destroy() {
     this.trackHandlers.forEach(({ track, handler }) => track.removeEventListener('ended', handler));
     this.trackHandlers = [];
@@ -411,6 +421,8 @@ export class MediaSwitchingState implements BaseMediaState {
     this.ctx.emit({ type: 'media.stream.stopped' });
   }
 
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
+
   public destroy() {
     this.controller.abort();
   }
@@ -487,6 +499,8 @@ export class MediaRecoveringState implements BaseMediaState {
     this.ctx.emit({ type: 'media.stream.stopped' });
   }
 
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
+
   public destroy() {
     this.controller.abort();
   }
@@ -514,6 +528,8 @@ export class MediaDeniedState implements BaseMediaState {
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);
   }
+
+  public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
 
   public destroy() { }
 

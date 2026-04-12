@@ -50,7 +50,7 @@ export class ConnectionConnectingState implements BaseConnectionState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ connection[${this.connectionId}] "error" while connecting`, error);
     this.handleFatalError(error);
   };
@@ -121,7 +121,7 @@ export class ConnectionOpenState implements BaseConnectionState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ connection[${this.connectionId}] "error" while open`, error);
     this.destroy();
     const next = new ConnectionErrorState(this.connectionId, this.remotePeerId, error);

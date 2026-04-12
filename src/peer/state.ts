@@ -4,7 +4,7 @@ import { isState, type MachineContext } from "../core";
 import { createLogger } from "../core/logger";
 import { isFatalError, type PeerEmittedEvent } from "./types";
 import type { CallState } from "../call";
-import { SignalingService } from "../signaling";
+import { SignalingService, isSignalingMessage } from "../signaling";
 import { CallCoordinator, type CallCoordinatorConfig } from "../call/CallCoordinator";
 
 const log = createLogger("peer");
@@ -185,7 +185,6 @@ export class PeerReadyState implements BasePeerState {
     );
     this.connections.set(connection.connectionId, child);
     this.ctx.bumpVersion();
-    this.ctx.notifyChange();
   }
 
   public call(remotePeerId: string, localStream: MediaStream) {
@@ -218,7 +217,6 @@ export class PeerReadyState implements BasePeerState {
 
     this.calls.set(call.connectionId, coordinator);
     this.ctx.bumpVersion();
-    this.ctx.notifyChange();
   }
 
   private spawnCallCoordinator(
@@ -282,7 +280,6 @@ export class PeerReadyState implements BasePeerState {
     );
     this.calls.set(call.connectionId, coordinator);
     this.ctx.bumpVersion();
-    this.ctx.notifyChange();
     this.ctx.emit({
       type: "call.incoming",
       callId: call.connectionId,
@@ -313,7 +310,6 @@ export class PeerReadyState implements BasePeerState {
     );
     this.connections.set(connection.connectionId, child);
     this.ctx.bumpVersion();
-    this.ctx.notifyChange();
   };
 
   private onDisconnected = () => {
@@ -373,9 +369,8 @@ export class PeerReadyState implements BasePeerState {
       connectionId,
       remotePeerId,
       (id, data) => {
-        const event = data as { type: string; callId: string };
-        if (event?.type === "remote_close" || event?.type === "call_rejected" || event?.type === "call_declined" || event?.type === "call_held" || event?.type === "call_resumed") {
-          this.signalingService.handleMessage(id, event as any);
+        if (isSignalingMessage(data)) {
+          this.signalingService.handleMessage(id, data);
           return;
         }
         this.ctx.emit({ type: "connection.data", connectionId: id, data });
@@ -420,7 +415,6 @@ export class PeerReadyState implements BasePeerState {
     if (child) child.destroy();
     this.connections.delete(connectionId);
     this.ctx.bumpVersion();
-    this.ctx.notifyChange();
     if (event) this.ctx.emit(event);
   }
 
@@ -430,7 +424,6 @@ export class PeerReadyState implements BasePeerState {
     if (coordinator) coordinator.destroy();
     this.calls.delete(callId);
     this.ctx.bumpVersion();
-    this.ctx.notifyChange();
     if (event) this.ctx.emit(event);
 
     // After removing a call, check if held calls remain with no live call
@@ -464,15 +457,15 @@ export class PeerReadyState implements BasePeerState {
     for (const conn of this.connections.values()) {
       try {
         conn.destroy();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        log.debug('  error during connection cleanup:', e);
       }
     }
     for (const call of this.calls.values()) {
       try {
         call.destroy();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        log.debug('  error during call cleanup:', e);
       }
     }
   }
@@ -580,15 +573,15 @@ export class PeerDisconnectedState implements BasePeerState {
     for (const conn of this.connections.values()) {
       try {
         conn.destroy();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        log.debug('  error during connection cleanup:', e);
       }
     }
     for (const call of this.calls.values()) {
       try {
         call.destroy();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        log.debug('  error during call cleanup:', e);
       }
     }
   }

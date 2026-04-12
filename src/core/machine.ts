@@ -1,23 +1,7 @@
 import { createLogger, type Logger } from './logger';
-import type { MediaConnection } from 'peerjs';
-import type { CallDirection } from '../call/state';
-import type { CallMachine } from '../call/CallMachine';
 
 export interface MachineContext<S> {
   transition: (nextState: S) => void;
-}
-
-export interface MachineFactory<S, C = {}> {
-  create(context: MachineContext<S>, config?: C): S;
-}
-
-export interface CallMachineFactory {
-  create(config: {
-    call: MediaConnection;
-    callId: string;
-    remotePeerId: string;
-    direction: CallDirection;
-  }): CallMachine;
 }
 
 /**

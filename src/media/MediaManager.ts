@@ -51,7 +51,7 @@ export class MediaMachine extends AbstractMachine<MediaState, MediaEmittedEvent>
         microphone: micStatus?.state ?? 'unknown',
       };
       this.log.info('🔑 permission change detected', permissions);
-      this.currentState.permissions = permissions;
+      this.currentState.updatePermissions(permissions);
       this.notifySubscribers();
       this.emit({ type: 'media.permission.status', permissions });
     };

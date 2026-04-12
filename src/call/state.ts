@@ -24,29 +24,73 @@ export interface BaseCallState {
 const RINGING_TIMEOUT_MS = 30_000;
 const CONNECTING_TIMEOUT_MS = 30_000;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── TrackController ──────────────────────────────────────────────────────────
 
 /**
- * Disable all outgoing local tracks via PeerJS internal RTCPeerConnection.
+ * Encapsulates the fragile PeerJS internal access for track enable/disable.
+ * All `(call as any).peerConnection` access is isolated here, making it
+ * easy to find and fix if PeerJS changes its internal structure.
  */
-function disableLocalTracks(call: MediaConnection): void {
-  const pc = (call as any).peerConnection as RTCPeerConnection | undefined;
-  if (pc) {
-    for (const sender of pc.getSenders()) {
-      if (sender.track) sender.track.enabled = false;
+class TrackController {
+  constructor(
+    private readonly call: MediaConnection,
+    private readonly remoteStream?: MediaStream,
+  ) {}
+
+  /**
+   * Access the underlying RTCPeerConnection from PeerJS.
+   * Returns null if the internal structure has changed.
+   */
+  private getPeerConnection(): RTCPeerConnection | null {
+    // PeerJS stores the peer connection on the MediaConnection instance.
+    // This is an undocumented internal — if PeerJS changes, update here.
+    const pc = (this.call as any).peerConnection as RTCPeerConnection | undefined;
+    if (!pc) {
+      log.warn('TrackController: peerConnection not found — PeerJS internals may have changed');
+    }
+    return pc ?? null;
+  }
+
+  /** Disable all outgoing local tracks. */
+  disableLocal(): void {
+    const pc = this.getPeerConnection();
+    if (pc) {
+      for (const sender of pc.getSenders()) {
+        if (sender.track) sender.track.enabled = false;
+      }
     }
   }
-}
 
-/**
- * Re-enable all outgoing local tracks via PeerJS internal RTCPeerConnection.
- */
-function enableLocalTracks(call: MediaConnection): void {
-  const pc = (call as any).peerConnection as RTCPeerConnection | undefined;
-  if (pc) {
-    for (const sender of pc.getSenders()) {
-      if (sender.track) sender.track.enabled = true;
+  /** Re-enable all outgoing local tracks. */
+  enableLocal(): void {
+    const pc = this.getPeerConnection();
+    if (pc) {
+      for (const sender of pc.getSenders()) {
+        if (sender.track) sender.track.enabled = true;
+      }
     }
+  }
+
+  /** Disable all remote incoming tracks. */
+  disableRemote(): void {
+    this.remoteStream?.getTracks().forEach(t => (t.enabled = false));
+  }
+
+  /** Re-enable all remote incoming tracks. */
+  enableRemote(): void {
+    this.remoteStream?.getTracks().forEach(t => (t.enabled = true));
+  }
+
+  /** Disable both local outgoing and remote incoming tracks (for hold). */
+  holdAll(): void {
+    this.disableLocal();
+    this.disableRemote();
+  }
+
+  /** Re-enable both local outgoing and remote incoming tracks (for resume). */
+  resumeAll(): void {
+    this.enableLocal();
+    this.enableRemote();
   }
 }
 
@@ -93,7 +137,7 @@ export class CallRingingState implements BaseCallState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ call[${this.callId}] "error" while ringing`, error);
     this.handleFatalError(error);
   };
@@ -167,7 +211,7 @@ export class CallConnectingState implements BaseCallState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ call[${this.callId}] "error" while connecting`, error);
     this.handleFatalError(error);
   };
@@ -260,7 +304,7 @@ export class CallLiveState implements BaseCallState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ call[${this.callId}] "error" while live`, error);
     this.destroy();
     const next = new CallErrorState(this.callId, this.remotePeerId, error);
@@ -299,10 +343,8 @@ export class CallHeldState implements BaseCallState {
   ) {
     log.info(`⏸ CallHeldState[${callId}] — call held with "${remotePeerId}"`);
 
-    // Disable outgoing local tracks via PeerJS internal
-    disableLocalTracks(call);
-    // Disable incoming remote tracks
-    remoteStream.getTracks().forEach(t => (t.enabled = false));
+    // Disable all tracks (local outgoing + remote incoming)
+    new TrackController(call, remoteStream).holdAll();
 
     this.call.on('close', this.onClose);
     this.call.on('error', this.onError);
@@ -315,10 +357,8 @@ export class CallHeldState implements BaseCallState {
   public resume(): void {
     log.info(`  call[${this.callId}].resume() — resuming held call`);
 
-    // Re-enable outgoing local tracks
-    enableLocalTracks(this.call);
-    // Re-enable remote tracks
-    this.remoteStream.getTracks().forEach(t => (t.enabled = true));
+    // Re-enable all tracks
+    new TrackController(this.call, this.remoteStream).resumeAll();
 
     this.destroy();
     const next = new CallLiveState(
@@ -345,7 +385,7 @@ export class CallHeldState implements BaseCallState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ call[${this.callId}] "error" while held`, error);
     this.destroy();
     const next = new CallErrorState(this.callId, this.remotePeerId, error);
@@ -385,10 +425,8 @@ export class CallRemoteHeldState implements BaseCallState {
   ) {
     log.info(`⏸ CallRemoteHeldState[${callId}] — remote peer held the call`);
 
-    // Disable our outgoing tracks (no point sending when remote is holding)
-    disableLocalTracks(call);
-    // Disable remote tracks
-    remoteStream.getTracks().forEach(t => (t.enabled = false));
+    // Disable all tracks (local outgoing + remote incoming)
+    new TrackController(call, remoteStream).holdAll();
 
     this.call.on('close', this.onClose);
     this.call.on('error', this.onError);
@@ -401,10 +439,8 @@ export class CallRemoteHeldState implements BaseCallState {
   public remoteResumed(): void {
     log.info(`  call[${this.callId}].remoteResumed() — remote peer resumed the call`);
 
-    // Re-enable our outgoing tracks
-    enableLocalTracks(this.call);
-    // Re-enable remote tracks
-    this.remoteStream.getTracks().forEach(t => (t.enabled = true));
+    // Re-enable all tracks
+    new TrackController(this.call, this.remoteStream).resumeAll();
 
     this.destroy();
     const next = new CallLiveState(
@@ -431,7 +467,7 @@ export class CallRemoteHeldState implements BaseCallState {
     this.ctx.transition(next);
   };
 
-  private onError = (error: any) => {
+  private onError = (error: Error | PeerError<string>) => {
     log.error(`❌ call[${this.callId}] "error" while remote-held`, error);
     this.destroy();
     const next = new CallErrorState(this.callId, this.remotePeerId, error);

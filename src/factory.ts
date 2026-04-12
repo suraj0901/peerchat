@@ -7,6 +7,7 @@ import Peer from 'peerjs';
 import type { PeerOptions as PeerJsOptions } from 'peerjs';
 import { PeerManager } from './peer/PeerManager';
 import { MediaMachine } from './media/MediaManager';
+import { setLogging } from './core/logger';
 
 // ── Options ───────────────────────────────────────────────────────────────────
 
@@ -82,8 +83,7 @@ export function createPeer(options: CreatePeerOptions = {}): PeerManager {
   } = options;
 
   if (logging) {
-    // Import and enable logging if requested
-    import('./core/logger').then(({ setLogging }) => setLogging(true));
+    setLogging(true);
   }
 
   const peerJsConfig: PeerJsOptions = {

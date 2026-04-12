@@ -4,6 +4,7 @@ import { createLogger } from '../core/logger';
 import { PeerInitializingState, PeerReadyState, type PeerContext, type PeerState } from './state';
 import type { PeerEmittedEvent } from './types';
 import type { CallInfo, CallEmittedEvent } from '../call/types';
+import type { CallState } from '../call/state';
 import type { ConnectionInfo } from '../connection/types';
 import type { CallMachine } from '../call/CallMachine';
 import type { ConnectionMachine } from '../connection/ConnectionMachine';
@@ -27,6 +28,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   protected readonly log = createLogger('PeerManager');
   private attachedMedia: MediaMachine | null = null;
   private pendingLocalStream: MediaStream | null = null;
+  private mediaSubscriptions: Array<{ unsubscribe: () => void }> = [];
 
   constructor(input: { peer: Peer; maxRetries?: number; baseRetryDelay?: number }) {
     super();
@@ -50,9 +52,14 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   /**
    * Attach a MediaMachine to this PeerManager for automatic stream handling.
    * When attached, `call()` and `answer()` will use the attached media's stream.
+   * Calling this again with a new MediaMachine will detach the previous one first.
    */
   attachMedia(media: MediaMachine): void {
     this.log.info('📎 attachMedia() called');
+
+    // Clean up previous subscriptions if re-attaching
+    this.cleanupMediaSubscriptions();
+
     this.attachedMedia = media;
 
     // If media is already active, store the stream
@@ -61,22 +68,75 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       this.pendingLocalStream = mediaState.stream;
     }
 
-    // Listen for stream ready/stopped events
-    media.on('media.stream.ready', ({ stream }) => {
-      this.pendingLocalStream = stream;
-    });
-    media.on('media.stream.stopped', () => {
-      this.pendingLocalStream = null;
-    });
+    // Listen for stream ready/stopped events and track subscriptions
+    this.mediaSubscriptions.push(
+      media.on('media.stream.ready', ({ stream }) => {
+        this.pendingLocalStream = stream;
+      }),
+      media.on('media.stream.stopped', () => {
+        this.pendingLocalStream = null;
+      }),
+    );
   }
 
   /**
-   * Detach previously attached media.
+   * Detach previously attached media and clean up event subscriptions.
    */
   detachMedia(): void {
     this.log.info('🔌 detachMedia() called');
+    this.cleanupMediaSubscriptions();
     this.attachedMedia = null;
     this.pendingLocalStream = null;
+  }
+
+  private cleanupMediaSubscriptions(): void {
+    for (const sub of this.mediaSubscriptions) {
+      sub.unsubscribe();
+    }
+    this.mediaSubscriptions = [];
+  }
+
+  // ── State Guards ──────────────────────────────────────────────────────────────
+
+  /**
+   * Require the peer to be in the 'ready' state.
+   * Returns the PeerReadyState or null (with a warning log).
+   */
+  private requireReady(caller: string): PeerReadyState | null {
+    const state = this.getState();
+    if (state._tag !== 'ready') {
+      this.log.warn(`${caller}() failed — peer state is "${state._tag}", not "ready"`);
+      return null;
+    }
+    return state;
+  }
+
+  /**
+   * Require a call to exist and be in a specific state.
+   * Returns the narrowed call state or null (with a warning log).
+   */
+  private requireCall<T extends CallState['_tag']>(
+    caller: string,
+    callId: string,
+    ...expectedTags: T[]
+  ): Extract<CallState, { _tag: T }> | null {
+    const state = this.requireReady(caller);
+    if (!state) return null;
+
+    const coordinator = state.calls.get(callId);
+    if (!coordinator) {
+      this.log.warn(`${caller}() failed — call "${callId}" not found`);
+      return null;
+    }
+
+    const callState = coordinator.callMachine.getState();
+    if (!expectedTags.includes(callState._tag as T)) {
+      const expected = expectedTags.length === 1 ? `"${expectedTags[0]}"` : `one of [${expectedTags.join(', ')}]`;
+      this.log.warn(`${caller}() failed — call "${callId}" state is "${callState._tag}", expected ${expected}`);
+      return null;
+    }
+
+    return callState as Extract<CallState, { _tag: T }>;
   }
 
   // ── Convenience Methods ─────────────────────────────────────────────────────
@@ -85,12 +145,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Connect to a remote peer by ID. Idempotent — skips if already connected.
    */
   connect(remotePeerId: string): void {
-    const state = this.getState();
-    if (state._tag === 'ready') {
-      state.connect(remotePeerId);
-    } else {
-      this.log.warn(`connect() ignored — peer state is "${state._tag}", not "ready"`);
-    }
+    const state = this.requireReady('connect');
+    if (state) state.connect(remotePeerId);
   }
 
   /**
@@ -98,11 +154,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Returns true if the data was sent, false if no connection is available.
    */
   send(remotePeerId: string, data: unknown): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`send() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
+    const state = this.requireReady('send');
+    if (!state) return false;
 
     // Find an open connection
     for (const machine of state.connections.values()) {
@@ -127,11 +180,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Blocked if there is already a live call — hold or hang up first.
    */
   call(remotePeerId: string, options?: CallOptions): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`call() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
+    const state = this.requireReady('call');
+    if (!state) return false;
 
     // Block outbound call if a live call already exists
     if (this.hasLiveCall()) {
@@ -157,23 +207,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Returns true if the call was answered, false if not found or already handled.
    */
   answer(callId: string, options?: AnswerOptions): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`answer() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
-
-    const coordinator = state.calls.get(callId);
-    if (!coordinator) {
-      this.log.warn(`answer() failed — call "${callId}" not found`);
-      return false;
-    }
-
-    const callState = coordinator.callMachine.getState();
-    if (callState._tag !== 'ringing') {
-      this.log.warn(`answer() failed — call "${callId}" state is "${callState._tag}", not "ringing"`);
-      return false;
-    }
+    const callState = this.requireCall('answer', callId, 'ringing');
+    if (!callState) return false;
 
     let stream = options?.stream ?? this.pendingLocalStream;
     if (!stream) {
@@ -193,23 +228,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Returns true if the call was rejected, false if not found.
    */
   reject(callId: string): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`reject() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
-
-    const coordinator = state.calls.get(callId);
-    if (!coordinator) {
-      this.log.warn(`reject() failed — call "${callId}" not found`);
-      return false;
-    }
-
-    const callState = coordinator.callMachine.getState();
-    if (callState._tag !== 'ringing') {
-      this.log.warn(`reject() failed — call "${callId}" state is "${callState._tag}", not "ringing"`);
-      return false;
-    }
+    const callState = this.requireCall('reject', callId, 'ringing');
+    if (!callState) return false;
 
     callState.reject();
     return true;
@@ -220,23 +240,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Returns true if the call was hung up, false if not found.
    */
   hangUp(callId: string): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`hangUp() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
-
-    const coordinator = state.calls.get(callId);
-    if (!coordinator) {
-      this.log.warn(`hangUp() failed — call "${callId}" not found`);
-      return false;
-    }
-
-    const callState = coordinator.callMachine.getState();
-    if (callState._tag !== 'live' && callState._tag !== 'connecting' && callState._tag !== 'held' && callState._tag !== 'remoteHeld') {
-      this.log.warn(`hangUp() failed — call "${callId}" state is "${callState._tag}"`);
-      return false;
-    }
+    const callState = this.requireCall('hangUp', callId, 'live', 'connecting', 'held', 'remoteHeld');
+    if (!callState) return false;
 
     callState.hangUp();
     return true;
@@ -249,23 +254,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Returns true if the call was held, false if not found or not in live state.
    */
   hold(callId: string): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`hold() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
-
-    const coordinator = state.calls.get(callId);
-    if (!coordinator) {
-      this.log.warn(`hold() failed — call "${callId}" not found`);
-      return false;
-    }
-
-    const callState = coordinator.callMachine.getState();
-    if (callState._tag !== 'live') {
-      this.log.warn(`hold() failed — call "${callId}" state is "${callState._tag}", not "live"`);
-      return false;
-    }
+    const callState = this.requireCall('hold', callId, 'live');
+    if (!callState) return false;
 
     callState.hold();
     return true;
@@ -277,23 +267,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    * Returns true if the call was resumed, false if not found or not in held state.
    */
   resume(callId: string): boolean {
-    const state = this.getState();
-    if (state._tag !== 'ready') {
-      this.log.warn(`resume() failed — peer state is "${state._tag}", not "ready"`);
-      return false;
-    }
-
-    const coordinator = state.calls.get(callId);
-    if (!coordinator) {
-      this.log.warn(`resume() failed — call "${callId}" not found`);
-      return false;
-    }
-
-    const callState = coordinator.callMachine.getState();
-    if (callState._tag !== 'held') {
-      this.log.warn(`resume() failed — call "${callId}" state is "${callState._tag}", not "held"`);
-      return false;
-    }
+    const callState = this.requireCall('resume', callId, 'held');
+    if (!callState) return false;
 
     // Hold any currently live call first
     this.holdAllLiveCalls();
@@ -436,6 +411,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   override destroy(): void {
+    this.cleanupMediaSubscriptions();
     this.attachedMedia = null;
     this.pendingLocalStream = null;
     super.destroy();
