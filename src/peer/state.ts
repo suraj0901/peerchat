@@ -247,6 +247,12 @@ export class PeerReadyState implements BasePeerState {
       onActive: (callId, remoteStream) => {
         this.ctx.emit({ type: 'call.active', callId, remotePeerId, remoteStream });
       },
+      onHeld: (callId) => {
+        this.ctx.emit({ type: 'call.held', callId, remotePeerId });
+      },
+      onResumed: (callId, remoteStream) => {
+        this.ctx.emit({ type: 'call.resumed', callId, remotePeerId });
+      },
       getConnection: (remotePeerId) => {
         for (const childMachine of this.connections.values()) {
           const child = childMachine.getState();
@@ -368,7 +374,7 @@ export class PeerReadyState implements BasePeerState {
       remotePeerId,
       (id, data) => {
         const event = data as { type: string; callId: string };
-        if (event?.type === "remote_close" || event?.type === "call_rejected" || event?.type === "call_declined") {
+        if (event?.type === "remote_close" || event?.type === "call_rejected" || event?.type === "call_declined" || event?.type === "call_held" || event?.type === "call_resumed") {
           this.signalingService.handleMessage(id, event as any);
           return;
         }

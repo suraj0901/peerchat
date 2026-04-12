@@ -11,6 +11,10 @@ export const CallEvents = {
   ERROR: 'call.error',
   REJECTED: 'call.rejected',
   DECLINED: 'call.declined',
+  HELD: 'call.held',
+  RESUMED: 'call.resumed',
+  REMOTE_HELD: 'call.remoteHeld',
+  REMOTE_RESUMED: 'call.remoteResumed',
 } as const;
 
 export const ConnectionEvents = {

@@ -13,7 +13,11 @@ export type PeerEmittedEvent =
   | { type: 'call.ended'; callId: string }
   | { type: 'call.error'; callId: string; error: Error | PeerError<string> }
   | { type: 'call.rejected'; callId: string; remotePeerId: string }
-  | { type: 'call.declined'; callId: string; remotePeerId: string };
+  | { type: 'call.declined'; callId: string; remotePeerId: string }
+  | { type: 'call.held'; callId: string; remotePeerId: string }
+  | { type: 'call.resumed'; callId: string; remotePeerId: string }
+  | { type: 'call.remoteHeld'; callId: string; remotePeerId: string }
+  | { type: 'call.remoteResumed'; callId: string; remotePeerId: string };
 
 // ── Error Helpers ─────────────────────────────────────────────────────────────
 

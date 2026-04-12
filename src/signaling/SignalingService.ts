@@ -3,7 +3,7 @@ import type { SignalingHandler, SignalingMessage, SignalingServiceConfig } from 
 
 const log = createLogger('signaling');
 
-type SignalingMessageType = 'remote_close' | 'call_rejected' | 'call_declined';
+type SignalingMessageType = 'remote_close' | 'call_rejected' | 'call_declined' | 'call_held' | 'call_resumed';
 
 export class SignalingService {
   private handlers: Map<string, SignalingHandler> = new Map();
@@ -31,6 +31,14 @@ export class SignalingService {
 
   sendCallDeclined(callId: string, remotePeerId: string): void {
     this.sendSignalingMessage('call_declined', callId, remotePeerId);
+  }
+
+  sendCallHeld(callId: string, remotePeerId: string): void {
+    this.sendSignalingMessage('call_held', callId, remotePeerId);
+  }
+
+  sendCallResumed(callId: string, remotePeerId: string): void {
+    this.sendSignalingMessage('call_resumed', callId, remotePeerId);
   }
 
   handleMessage(connectionId: string, message: SignalingMessage): void {

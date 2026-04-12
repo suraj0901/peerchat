@@ -124,11 +124,18 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   /**
    * Make a call to a remote peer.
    * Uses attached media stream if available, or requires one in options.
+   * Blocked if there is already a live call — hold or hang up first.
    */
   call(remotePeerId: string, options?: CallOptions): boolean {
     const state = this.getState();
     if (state._tag !== 'ready') {
       this.log.warn(`call() failed — peer state is "${state._tag}", not "ready"`);
+      return false;
+    }
+
+    // Block outbound call if a live call already exists
+    if (this.hasLiveCall()) {
+      this.log.warn('call() blocked — a live call already exists. Hold or hang up first.');
       return false;
     }
 
@@ -146,6 +153,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   /**
    * Answer an incoming call.
    * Uses attached media stream if available, or requires one in options.
+   * Automatically holds any currently live call before answering.
    * Returns true if the call was answered, false if not found or already handled.
    */
   answer(callId: string, options?: AnswerOptions): boolean {
@@ -172,6 +180,9 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       this.log.warn(`answer() failed — no local stream available`);
       return false;
     }
+
+    // Auto-hold any currently live call before answering
+    this.holdAllLiveCalls();
 
     callState.answer(stream);
     return true;
@@ -222,13 +233,101 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     }
 
     const callState = coordinator.callMachine.getState();
-    if (callState._tag !== 'live' && callState._tag !== 'connecting') {
+    if (callState._tag !== 'live' && callState._tag !== 'connecting' && callState._tag !== 'held' && callState._tag !== 'remoteHeld') {
       this.log.warn(`hangUp() failed — call "${callId}" state is "${callState._tag}"`);
       return false;
     }
 
     callState.hangUp();
     return true;
+  }
+
+  // ── Hold / Resume ──────────────────────────────────────────────────────────
+
+  /**
+   * Put a live call on hold.
+   * Returns true if the call was held, false if not found or not in live state.
+   */
+  hold(callId: string): boolean {
+    const state = this.getState();
+    if (state._tag !== 'ready') {
+      this.log.warn(`hold() failed — peer state is "${state._tag}", not "ready"`);
+      return false;
+    }
+
+    const coordinator = state.calls.get(callId);
+    if (!coordinator) {
+      this.log.warn(`hold() failed — call "${callId}" not found`);
+      return false;
+    }
+
+    const callState = coordinator.callMachine.getState();
+    if (callState._tag !== 'live') {
+      this.log.warn(`hold() failed — call "${callId}" state is "${callState._tag}", not "live"`);
+      return false;
+    }
+
+    callState.hold();
+    return true;
+  }
+
+  /**
+   * Resume a held call.
+   * Automatically holds any currently live call before resuming.
+   * Returns true if the call was resumed, false if not found or not in held state.
+   */
+  resume(callId: string): boolean {
+    const state = this.getState();
+    if (state._tag !== 'ready') {
+      this.log.warn(`resume() failed — peer state is "${state._tag}", not "ready"`);
+      return false;
+    }
+
+    const coordinator = state.calls.get(callId);
+    if (!coordinator) {
+      this.log.warn(`resume() failed — call "${callId}" not found`);
+      return false;
+    }
+
+    const callState = coordinator.callMachine.getState();
+    if (callState._tag !== 'held') {
+      this.log.warn(`resume() failed — call "${callId}" state is "${callState._tag}", not "held"`);
+      return false;
+    }
+
+    // Hold any currently live call first
+    this.holdAllLiveCalls();
+
+    callState.resume();
+    return true;
+  }
+
+  /**
+   * Check if there is any call currently in the live state.
+   */
+  private hasLiveCall(): boolean {
+    const state = this.getState();
+    if (state._tag !== 'ready') return false;
+    for (const coordinator of state.calls.values()) {
+      if (coordinator.callMachine.getState()._tag === 'live') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Hold all currently live calls. Used before answering a new call or resuming a held call.
+   */
+  private holdAllLiveCalls(): void {
+    const state = this.getState();
+    if (state._tag !== 'ready') return;
+
+    for (const coordinator of state.calls.values()) {
+      const callState = coordinator.callMachine.getState();
+      if (callState._tag === 'live') {
+        this.log.info(`  auto-holding live call "${callState.callId}"`);
+        callState.hold();
+      }
+    }
   }
 
   // ── Query Methods (Immutable Snapshots) ─────────────────────────────────────
@@ -245,11 +344,17 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     const calls: CallInfo[] = [];
     for (const [callId, coordinator] of state.calls) {
       const callState = coordinator.callMachine.getState();
+      let direction: 'inbound' | 'outbound' = 'outbound';
+      if (callState._tag === 'ringing') {
+        direction = 'inbound';
+      } else if ('direction' in callState) {
+        direction = (callState as any).direction;
+      }
       calls.push({
         callId,
         remotePeerId: callState.remotePeerId,
         state: callState._tag,
-        direction: callState._tag === 'ringing' ? 'inbound' : ('direction' in callState ? (callState as any).direction : 'outbound'),
+        direction,
       });
     }
     return calls;

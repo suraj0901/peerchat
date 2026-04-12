@@ -16,6 +16,8 @@ export interface CallCoordinatorConfig {
   signalingService: SignalingService;
   onEnded: (callId: string, event: { type: 'call.ended' } | { type: 'call.error'; error: Error } | { type: 'call.rejected' } | { type: 'call.declined' }) => void;
   onActive: (callId: string, remoteStream: MediaStream) => void;
+  onHeld: (callId: string) => void;
+  onResumed: (callId: string, remoteStream: MediaStream) => void;
   getConnection: (remotePeerId: string) => ConnectionMachine | null;
   openConnection: (remotePeerId: string) => void;
   removeConnection: (connectionId: string) => void;
@@ -85,6 +87,26 @@ export class CallCoordinator {
         this.config.onEnded(this.callId, { type: 'call.declined' });
         return;
       }
+      if (message.type === 'call_held') {
+        log.info(`  CallCoordinator[${this.callId}] received call_held — remote put us on hold`);
+        const callState = this.callMachine.getState();
+        if (callState._tag === 'live') {
+          callState.remoteHeld();
+        } else {
+          log.warn(`  → ignoring call_held — call state is "${callState._tag}", not "live"`);
+        }
+        return;
+      }
+      if (message.type === 'call_resumed') {
+        log.info(`  CallCoordinator[${this.callId}] received call_resumed — remote resumed`);
+        const callState = this.callMachine.getState();
+        if (callState._tag === 'remoteHeld') {
+          callState.remoteResumed();
+        } else {
+          log.warn(`  → ignoring call_resumed — call state is "${callState._tag}", not "remoteHeld"`);
+        }
+        return;
+      }
     };
 
     this.config.signalingService.registerHandler(this.callId, handleSignalingMessage);
@@ -112,9 +134,28 @@ export class CallCoordinator {
   private setupTransitionHandler() {
     this.callMachine.onTransition((next, prev) => {
       log.info(`  CallCoordinator[${this.callId}] call transition: ${prev._tag} → ${next._tag}`);
+
+      // Live call established
       if (next._tag === 'live' && prev._tag === 'connecting') {
         this.config.onActive(this.callId, next.remoteStream);
       }
+
+      // Local hold: live → held
+      if (next._tag === 'held' && prev._tag === 'live') {
+        this.config.signalingService.sendCallHeld(this.callId, this.remotePeerId);
+        this.config.onHeld(this.callId);
+      }
+
+      // Local resume: held → live
+      if (next._tag === 'live' && prev._tag === 'held') {
+        this.config.signalingService.sendCallResumed(this.callId, this.remotePeerId);
+        this.config.onResumed(this.callId, next.remoteStream);
+      }
+
+      // Remote hold: live → remoteHeld (signaling handled in setupParallelConnection)
+      // Remote resume: remoteHeld → live (signaling handled in setupParallelConnection)
+
+      // Terminal states
       if (next._tag === 'ended') {
         this.config.onEnded(this.callId, { type: 'call.ended' });
         return;
@@ -123,6 +164,7 @@ export class CallCoordinator {
         this.config.onEnded(this.callId, { type: 'call.error', error: next.error });
         return;
       }
+
       this.config.notifyChange();
     });
   }
