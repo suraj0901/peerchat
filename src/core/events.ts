@@ -15,6 +15,7 @@ export const CallEvents = {
   RESUMED: 'call.resumed',
   REMOTE_HELD: 'call.remoteHeld',
   REMOTE_RESUMED: 'call.remoteResumed',
+  SELECTION_REQUIRED: 'call.selectionRequired',
 } as const;
 
 export const ConnectionEvents = {
