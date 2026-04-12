@@ -61,6 +61,12 @@ peer.on(CallEvents.ACTIVE, ({ callId, remoteStream }) => {
 peer.hold(callId);   // Put current call on hold
 peer.resume(callId); // Resume a held call
 
+// Handle multi-call selection (active call ended, held calls remain)
+peer.on(CallEvents.SELECTION_REQUIRED, ({ heldCallIds }) => {
+  // Show call picker UI — user picks which call to resume
+  peer.resume(heldCallIds[0]);
+});
+
 // Hang up
 peer.hangUp(callId);
 ```
@@ -161,6 +167,15 @@ peer.detachMedia();
 // Get all active calls
 const calls = peer.getActiveCalls();
 // → [{ callId, remotePeerId, state: 'live' | 'ringing' | 'held' | 'remoteHeld' | ..., direction: 'inbound' | 'outbound' }]
+
+// Get only held calls (useful for call picker UI)
+const heldCalls = peer.getHeldCalls();
+// → [{ callId, remotePeerId, state: 'held', direction }]
+
+// Check if user needs to pick a call (held calls exist, no live call)
+if (peer.needsCallSelection) {
+  // Show call picker UI
+}
 
 // Get all connections
 const connections = peer.getActiveConnections();
@@ -263,6 +278,7 @@ const peer = new PeerManager({
 | `call.resumed` | `{ callId, remotePeerId }` |
 | `call.remoteHeld` | `{ callId, remotePeerId }` |
 | `call.remoteResumed` | `{ callId, remotePeerId }` |
+| `call.selectionRequired` | `{ heldCallIds }` |
 
 ### `MediaMachine`
 
@@ -381,7 +397,8 @@ The 0.2.0 API is **backward compatible**. All existing code using `new PeerManag
 | Event constants | `import { PeerEvents, CallEvents, MediaEvents } from 'peerchat'` |
 | Convenience methods | `peer.call()`, `peer.send()`, `peer.answer()`, `peer.hangUp()`, `peer.reject()` |
 | Media attachment | `peer.attachMedia(media)` for automatic stream wiring |
-| Query methods | `peer.getActiveCalls()`, `peer.getActiveConnections()` |
+| Query methods | `peer.getActiveCalls()`, `peer.getActiveConnections()`, `peer.getHeldCalls()` |
+| Multi-call selection | `peer.needsCallSelection`, `CallEvents.SELECTION_REQUIRED` |
 | Child machine access | `peer.getCallMachine(callId)`, `peer.getConnectionMachine(connectionId)` |
 | React snapshots | `peer.getSnapshot()` returns `{ state, version }` |
 | Exported classes | `CallMachine`, `ConnectionMachine` now exported |
@@ -396,6 +413,8 @@ The `CallState` type union now includes `CallHeldState` (`_tag: 'held'`) and `Ca
 |---|---|
 | `peer.hold(callId)` | Put a live call on hold |
 | `peer.resume(callId)` | Resume a held call (auto-holds any live call) |
+| `peer.getHeldCalls()` | Get all calls currently on hold |
+| `peer.needsCallSelection` | `true` when held calls exist with no active call |
 
 **New Call Events:**
 
@@ -405,6 +424,7 @@ The `CallState` type union now includes `CallHeldState` (`_tag: 'held'`) and `Ca
 | `call.resumed` | Local user resumed a held call |
 | `call.remoteHeld` | Remote peer put you on hold |
 | `call.remoteResumed` | Remote peer resumed the call |
+| `call.selectionRequired` | Active call ended, held calls remain — UI should show picker |
 
 **Behavioral Changes:**
 - `call()` is now **blocked** if a live call already exists (returns `false`)

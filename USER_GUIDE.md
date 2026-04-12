@@ -35,6 +35,7 @@ A comprehensive guide to using PeerChat in your applications.
 - [Common Patterns](#common-patterns)
   - [Video Call with Auto Answer](#video-call-with-auto-answer)
   - [Call Hold / Resume](#call-hold--resume-1)
+  - [Multi-Call Selection](#multi-call-selection)
   - [Chat-Only with Data Channels](#chat-only-with-data-channels)
   - [Screen Sharing](#screen-sharing)
   - [Device Switching](#device-switching)
@@ -164,7 +165,9 @@ Each call has:
 - A `direction` — `'inbound'` or `'outbound'`
 - A state — `'ringing'`, `'connecting'`, `'live'`, `'held'`, `'remoteHeld'`, `'ended'`, or `'error'`
 
-**Only one call can be `live` at a time.** When you answer a second call, the first is automatically put on hold. Outbound calls are blocked if a live call already exists.
+**Only one call can be `live` at a time.** When you answer a second call, the first is automatically put on hold. Outbound calls are blocked if a live call already exists. Multiple calls can be in `held` state simultaneously.
+
+When the active call ends while calls remain on hold, PeerChat emits a `call.selectionRequired` event so the UI can present a call picker.
 
 ### Data Channels
 
@@ -405,6 +408,45 @@ Returns `true` if the call was resumed, `false` if not found or not in `held` st
 
 > **Important:** `resume()` automatically holds any currently live call before resuming the target call.
 
+#### Multi-Call Selection
+
+When the active call ends and one or more calls are still on hold, PeerChat emits a `call.selectionRequired` event. The UI should respond by showing a call picker.
+
+```ts
+import { CallEvents } from 'peerchat';
+
+// Listen for selection required
+peer.on(CallEvents.SELECTION_REQUIRED, ({ heldCallIds }) => {
+  console.log('Pick a call to resume:', heldCallIds);
+  // Show UI picker, then resume the user's choice
+});
+
+// You can also check the computed property at any time
+if (peer.needsCallSelection) {
+  const heldCalls = peer.getHeldCalls();
+  // Render call picker with heldCalls
+}
+```
+
+#### `needsCallSelection` (getter)
+
+Returns `true` when there are held calls but no live call. Use this to conditionally render a call picker in your UI.
+
+```ts
+if (peer.needsCallSelection) {
+  // Show call picker
+}
+```
+
+#### `getHeldCalls()`
+
+Returns an immutable snapshot of all calls in the `held` state.
+
+```ts
+const heldCalls = peer.getHeldCalls();
+// → [{ callId, remotePeerId, state: 'held', direction }]
+```
+
 #### Automatic Hold Behavior
 
 | Scenario | What Happens |
@@ -412,6 +454,7 @@ Returns `true` if the call was resumed, `false` if not found or not in `held` st
 | Already in a live call, accept a new incoming call | The existing live call is auto-held |
 | Already in a live call, try to make an outbound call | `call()` returns `false` (blocked) |
 | Resume a held call while another call is live | The live call is auto-held, then the target is resumed |
+| Hang up the active call with held calls remaining | `call.selectionRequired` event emitted |
 
 ### Sending Messages
 
@@ -565,6 +608,7 @@ import { CallEvents } from 'peerchat';
 | `call.resumed` | `CallEvents.RESUMED` | `{ callId, remotePeerId }` | Local user resumed a held call |
 | `call.remoteHeld` | `CallEvents.REMOTE_HELD` | `{ callId, remotePeerId }` | Remote peer put you on hold |
 | `call.remoteResumed` | `CallEvents.REMOTE_RESUMED` | `{ callId, remotePeerId }` | Remote peer resumed the call |
+| `call.selectionRequired` | `CallEvents.SELECTION_REQUIRED` | `{ heldCallIds }` | Active call ended, held calls remain — show picker |
 
 ### Connection Events
 
@@ -670,6 +714,40 @@ function resumeCall(callId: string) {
 // Switch between calls: resume call A (auto-holds call B)
 function switchToCall(callId: string) {
   peer.resume(callId);
+}
+```
+
+### Multi-Call Selection
+
+Handle the scenario where the active call ends while multiple calls are on hold:
+
+```ts
+import { createPeer, createMedia, CallEvents } from 'peerchat';
+
+const peer = createPeer();
+const media = createMedia();
+peer.attachMedia(media);
+
+// Scenario: User has Call A (held), Call B (held), Call C (live)
+// User hangs up Call C → need to pick between A and B
+
+peer.on(CallEvents.SELECTION_REQUIRED, ({ heldCallIds }) => {
+  console.log('Calls on hold:', heldCallIds);
+  // Show a call picker UI to the user
+  showCallPicker(heldCallIds);
+});
+
+// When user picks a call from the picker
+function onUserPicksCall(callId: string) {
+  peer.resume(callId); // Auto-holds any other live call
+}
+
+// Or check the property reactively (e.g., in React)
+function renderCallUI() {
+  if (peer.needsCallSelection) {
+    const heldCalls = peer.getHeldCalls();
+    // Render picker with heldCalls[].callId and heldCalls[].remotePeerId
+  }
 }
 ```
 
@@ -1308,9 +1386,11 @@ const peer = createPeer({
 
 ### How many simultaneous calls are supported?
 
-PeerChat enforces a **single active call** policy — only one call can be in the `live` state at a time. However, you can have multiple calls in `held`, `remoteHeld`, `ringing`, or `connecting` states simultaneously.
+PeerChat enforces a **single active call** policy — only one call can be in the `live` state at a time. However, you can have **multiple calls on hold simultaneously** in `held`, `remoteHeld`, `ringing`, or `connecting` states.
 
 When you accept a second incoming call, the first is automatically put on hold. You can switch between held calls using `peer.resume(callId)`.
+
+When the active call ends with held calls remaining, PeerChat emits `call.selectionRequired` so the UI can present a call picker. Use `peer.needsCallSelection` and `peer.getHeldCalls()` to query this state.
 
 Practical limits for total concurrent connections depend on:
 - **Browser** — Chrome supports ~256 concurrent WebRTC connections

@@ -217,6 +217,7 @@ export const CallEvents = {
   RESUMED: 'call.resumed',
   REMOTE_HELD: 'call.remoteHeld',
   REMOTE_RESUMED: 'call.remoteResumed',
+  SELECTION_REQUIRED: 'call.selectionRequired',
 } as const;
 
 export const ConnectionEvents = {
@@ -287,10 +288,20 @@ connect(remotePeerId: string): void
 attachMedia(media: MediaMachine): void
 detachMedia(): void
 getActiveCalls(): readonly CallInfo[]
+getHeldCalls(): readonly CallInfo[]                          // Only held calls (for call picker)
+needsCallSelection: boolean                                  // true when held calls exist, no live call
 getActiveConnections(): readonly ConnectionInfo[]
 getCallMachine(callId: string): CallMachine | null
 getConnectionMachine(connectionId: string): ConnectionMachine | null
 ```
+
+#### Multi-Call Orchestration
+
+`PeerReadyState` internally manages the multi-call lifecycle:
+
+- **`holdAllLiveCalls()`** — Called by `answer()` and `resume()` to auto-hold the current live call
+- **`emitSelectionRequiredIfNeeded()`** — Called after `removeCall()`. Checks if held calls remain with no live call, and if so emits `call.selectionRequired` with the list of `heldCallIds`
+- **`hasLiveCall()`** — Used by `call()` to block outbound calls when a live call exists
 
 #### Media Attachment
 
