@@ -1,4 +1,5 @@
 import type { MachineContext } from '../core';
+import { MediaEvents } from '../core/events';
 import { createLogger } from '../core/logger';
 import type { MediaEmittedEvent } from './types';
 
@@ -113,7 +114,7 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
       this.destroy();
       const next = new MediaIdleState(permissions, this.ctx);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.permission.status', permissions });
+      this.ctx.emit({ type: MediaEvents.PERMISSION_STATUS, permissions });
     } catch (error) {
       if (this.aborted) return;
       log.warn('  permission check failed', error);
@@ -171,7 +172,7 @@ export class MediaRequestingState implements BaseMediaState {
       this.destroy();
       const next = new MediaActiveState(stream, devices, this.mode, this.constraints, this.permissions, this.ctx);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.stream.ready', stream, mode: this.mode });
+      this.ctx.emit({ type: MediaEvents.STREAM_READY, stream, mode: this.mode });
     } catch (error) {
       if (this.controller.signal.aborted) return;
       this.destroy();
@@ -180,12 +181,12 @@ export class MediaRequestingState implements BaseMediaState {
         log.warn('  ⛔ permission denied');
         const next = new MediaDeniedState(this.permissions, this.ctx);
         this.ctx.transition(next);
-        this.ctx.emit({ type: 'media.permission.denied' });
+        this.ctx.emit({ type: MediaEvents.PERMISSION_DENIED });
       } else {
         log.error('  ❌ stream acquisition failed', error);
         const next = new MediaIdleState(this.permissions, this.ctx);
         this.ctx.transition(next);
-        this.ctx.emit({ type: 'media.stream.error', error: toError(error) });
+        this.ctx.emit({ type: MediaEvents.STREAM_ERROR, error: toError(error) });
       }
     }
   }
@@ -244,7 +245,7 @@ export class MediaActiveState implements BaseMediaState {
       void navigator.mediaDevices.enumerateDevices().then(devices => {
         log.debug(`  device change detected — ${devices.length} devices`);
         (this as { devices: MediaDeviceInfo[] }).devices = devices;
-        this.ctx.emit({ type: 'media.devices.updated', devices });
+        this.ctx.emit({ type: MediaEvents.DEVICES_UPDATED, devices });
       });
     };
     navigator.mediaDevices.addEventListener('devicechange', this.deviceChangeHandler);
@@ -257,8 +258,8 @@ export class MediaActiveState implements BaseMediaState {
       this.destroy();
       const next = new MediaRecoveringState(this.stream, this.mode, this.constraints, this.permissions, this.ctx);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.track.ended', kind });
-      this.ctx.emit({ type: 'media.recovering' });
+      this.ctx.emit({ type: MediaEvents.TRACK_ENDED, kind });
+      this.ctx.emit({ type: MediaEvents.RECOVERING });
     } else {
       // Screen mode — user intentionally stopped sharing
       log.info('  screen share ended by user');
@@ -266,7 +267,7 @@ export class MediaActiveState implements BaseMediaState {
       this.stream.getTracks().forEach(t => t.stop());
       const next = new MediaIdleState(this.permissions, this.ctx);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.stream.stopped' });
+      this.ctx.emit({ type: MediaEvents.STREAM_STOPPED });
     }
   }
 
@@ -274,7 +275,7 @@ export class MediaActiveState implements BaseMediaState {
     this.audioMuted = !this.audioMuted;
     this.stream.getAudioTracks().forEach(t => (t.enabled = !this.audioMuted));
     log.info(`  🔇 toggleAudio → ${this.audioMuted ? 'muted' : 'unmuted'}`);
-    this.ctx.emit({ type: 'media.audio.toggled', muted: this.audioMuted });
+    this.ctx.emit({ type: MediaEvents.AUDIO_TOGGLED, muted: this.audioMuted });
     this.ctx.notifySubscribers()
   }
 
@@ -282,7 +283,7 @@ export class MediaActiveState implements BaseMediaState {
     this.videoMuted = !this.videoMuted;
     this.stream.getVideoTracks().forEach(t => (t.enabled = !this.videoMuted));
     log.info(`  📷 toggleVideo → ${this.videoMuted ? 'off' : 'on'}`);
-    this.ctx.emit({ type: 'media.video.toggled', muted: this.videoMuted });
+    this.ctx.emit({ type: MediaEvents.VIDEO_TOGGLED, muted: this.videoMuted });
     this.ctx.notifySubscribers()
   }
 
@@ -303,7 +304,7 @@ export class MediaActiveState implements BaseMediaState {
     this.stream.getTracks().forEach(t => t.stop());
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);
-    this.ctx.emit({ type: 'media.stream.stopped' });
+    this.ctx.emit({ type: MediaEvents.STREAM_STOPPED });
   }
 
   public destroy() {
@@ -366,7 +367,7 @@ export class MediaSwitchingState implements BaseMediaState {
       this.destroy();
       const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.device.switched', kind: this.kind, stream: this.stream });
+      this.ctx.emit({ type: MediaEvents.DEVICE_SWITCHED, kind: this.kind, stream: this.stream });
     } catch (error) {
       if (this.controller.signal.aborted) return;
       log.error(`  ❌ ${this.kind} device switch failed`, error);
@@ -374,7 +375,7 @@ export class MediaSwitchingState implements BaseMediaState {
       // Return to active with existing stream
       const next = new MediaActiveState(this.stream, this.devices, this.mode, this.constraints, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.device.switch.failed', kind: this.kind, error: toError(error) });
+      this.ctx.emit({ type: MediaEvents.DEVICE_SWITCH_FAILED, kind: this.kind, error: toError(error) });
     }
   }
 
@@ -384,7 +385,7 @@ export class MediaSwitchingState implements BaseMediaState {
     this.stream.getTracks().forEach(t => t.stop());
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);
-    this.ctx.emit({ type: 'media.stream.stopped' });
+    this.ctx.emit({ type: MediaEvents.STREAM_STOPPED });
   }
 
   public destroy() {
@@ -430,7 +431,7 @@ export class MediaRecoveringState implements BaseMediaState {
       this.oldStream.getTracks().forEach(t => t.stop());
       const next = new MediaActiveState(stream, devices, this.mode, this.constraints, this.permissions, this.ctx);
       this.ctx.transition(next);
-      this.ctx.emit({ type: 'media.stream.ready', stream, mode: this.mode });
+      this.ctx.emit({ type: MediaEvents.STREAM_READY, stream, mode: this.mode });
     } catch (error) {
       if (this.controller.signal.aborted) return;
       this.destroy();
@@ -440,12 +441,12 @@ export class MediaRecoveringState implements BaseMediaState {
         log.warn('  ⛔ recovery failed — permission denied');
         const next = new MediaDeniedState(this.permissions, this.ctx);
         this.ctx.transition(next);
-        this.ctx.emit({ type: 'media.permission.denied' });
+        this.ctx.emit({ type: MediaEvents.PERMISSION_DENIED });
       } else {
         log.error('  ❌ recovery failed', error);
         const next = new MediaIdleState(this.permissions, this.ctx);
         this.ctx.transition(next);
-        this.ctx.emit({ type: 'media.stream.error', error: toError(error) });
+        this.ctx.emit({ type: MediaEvents.STREAM_ERROR, error: toError(error) });
       }
     }
   }
@@ -456,7 +457,7 @@ export class MediaRecoveringState implements BaseMediaState {
     this.oldStream.getTracks().forEach(t => t.stop());
     const next = new MediaIdleState(this.permissions, this.ctx);
     this.ctx.transition(next);
-    this.ctx.emit({ type: 'media.stream.stopped' });
+    this.ctx.emit({ type: MediaEvents.STREAM_STOPPED });
   }
 
   public destroy() {

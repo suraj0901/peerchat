@@ -1,4 +1,5 @@
 import type { DataConnection, MediaConnection, Peer, PeerError } from "peerjs";
+import { CallEvents, ConnectionEvents, PeerEvents } from "../core/events";
 import { ConnectionMachine } from "../connection/ConnectionMachine";
 import type { MachineContext, TransitionMap } from "../core";
 import { createLogger } from "../core/logger";
@@ -79,7 +80,7 @@ export class PeerInitializingState implements BasePeerState {
       this.ctx,
     );
     this.ctx.transition(next);
-    this.ctx.emit({ type: "peer.ready", peerId: id });
+    this.ctx.emit({ type: PeerEvents.READY, peerId: id });
   };
 
   private onError = (error: PeerError<string>) => {
@@ -94,7 +95,7 @@ export class PeerInitializingState implements BasePeerState {
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
     }
-    this.ctx.emit({ type: "peer.error", error });
+    this.ctx.emit({ type: PeerEvents.ERROR, error });
   };
 
   private onClose = () => {
@@ -119,7 +120,7 @@ export class PeerInitializingState implements BasePeerState {
       this.ctx,
     );
     this.ctx.transition(next);
-    this.ctx.emit({ type: "peer.disconnected" });
+    this.ctx.emit({ type: PeerEvents.DISCONNECTED });
   };
 
   public destroy() {
@@ -236,18 +237,18 @@ export class PeerReadyState implements BasePeerState {
       direction,
       signalingService: this.signalingService,
       onEnded: (callId, event) => {
-        if (event.type === 'call.ended') {
-          this.removeCall(callId, { type: 'call.ended', callId });
-        } else if (event.type === 'call.error') {
-          this.removeCall(callId, { type: 'call.error', callId, error: event.error });
-        } else if (event.type === 'call.rejected') {
-          this.removeCall(callId, { type: 'call.rejected', callId, remotePeerId });
-        } else if (event.type === 'call.declined') {
-          this.removeCall(callId, { type: 'call.declined', callId, remotePeerId });
+        if (event.type === PeerEvents.CALL_ENDED) {
+          this.removeCall(callId, { type: PeerEvents.CALL_ENDED, callId });
+        } else if (event.type === PeerEvents.CALL_ERROR) {
+          this.removeCall(callId, { type: PeerEvents.CALL_ERROR, callId, error: event.error });
+        } else if (event.type === PeerEvents.CALL_REJECTED) {
+          this.removeCall(callId, { type: PeerEvents.CALL_REJECTED, callId, remotePeerId });
+        } else if (event.type === PeerEvents.CALL_DECLINED) {
+          this.removeCall(callId, { type: PeerEvents.CALL_DECLINED, callId, remotePeerId });
         }
       },
       onActive: (callId, remoteStream) => {
-        this.ctx.emit({ type: 'call.active', callId, remotePeerId, remoteStream });
+        this.ctx.emit({ type: PeerEvents.CALL_ACTIVE, callId, remotePeerId, remoteStream });
       },
       getConnection: (remotePeerId) => {
         for (const childMachine of this.connections.values()) {
@@ -279,7 +280,7 @@ export class PeerReadyState implements BasePeerState {
     this.calls.set(call.connectionId, coordinator);
     this.ctx.notifyChange();
     this.ctx.emit({
-      type: "call.incoming",
+      type: PeerEvents.CALL_INCOMING,
       callId: call.connectionId,
       remotePeerId: call.peer,
     });
@@ -326,7 +327,7 @@ export class PeerReadyState implements BasePeerState {
       this.ctx,
     );
     this.ctx.transition(next);
-    this.ctx.emit({ type: "peer.disconnected" });
+    this.ctx.emit({ type: PeerEvents.DISCONNECTED });
   };
 
   private onError = (error: PeerError<string>) => {
@@ -340,7 +341,7 @@ export class PeerReadyState implements BasePeerState {
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
     }
-    this.ctx.emit({ type: "peer.error", error });
+    this.ctx.emit({ type: PeerEvents.ERROR, error });
   };
 
   private onClose = () => {
@@ -372,7 +373,7 @@ export class PeerReadyState implements BasePeerState {
           this.signalingService.handleMessage(id, event as any);
           return;
         }
-        this.ctx.emit({ type: "connection.data", connectionId: id, data });
+        this.ctx.emit({ type: PeerEvents.CONNECTION_DATA, connectionId: id, data });
       },
     );
 
@@ -382,21 +383,21 @@ export class PeerReadyState implements BasePeerState {
       );
       if (next._tag === "open" && prev._tag === "connecting") {
         this.ctx.emit({
-          type: "connection.opened",
+          type: PeerEvents.CONNECTION_OPENED,
           connectionId,
           remotePeerId,
         });
       }
       if (next._tag === "closed") {
         this.removeConnection(connectionId, {
-          type: "connection.closed",
+          type: PeerEvents.CONNECTION_CLOSED,
           connectionId,
         });
         return;
       }
       if (next._tag === "error") {
         this.removeConnection(connectionId, {
-          type: "connection.error",
+          type: PeerEvents.CONNECTION_ERROR,
           connectionId,
           error: next.error,
         });
@@ -527,7 +528,7 @@ export class PeerDisconnectedState implements BasePeerState {
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
     }
-    this.ctx.emit({ type: "peer.error", error });
+    this.ctx.emit({ type: PeerEvents.ERROR, error });
   };
 
   private onClose = () => {

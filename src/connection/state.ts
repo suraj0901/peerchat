@@ -1,4 +1,5 @@
 import type { DataConnection, PeerError } from 'peerjs';
+import { ConnectionEvents } from '../core/events';
 import type { MachineContext, TransitionMap } from '../core';
 import { createLogger } from '../core/logger';
 

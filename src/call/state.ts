@@ -1,4 +1,5 @@
 import type { MediaConnection, PeerError } from 'peerjs';
+import { CallEvents } from '../core/events';
 
 import type { MachineContext, TransitionMap } from '../core';
 import { createLogger } from '../core/logger';
