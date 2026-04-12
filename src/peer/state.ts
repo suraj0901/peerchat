@@ -11,10 +11,15 @@ const log = createLogger("peer");
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
+import type { ConnectionManager } from '../connection/ConnectionManager';
+import type { CallManager } from '../call/CallManager';
+
 export interface PeerContext extends MachineContext<PeerState> {
   emit: (event: PeerEmittedEvent) => void;
   notifyChange: () => void;
   bumpVersion: () => void;
+  connectionManager: ConnectionManager;
+  callManager: CallManager;
 }
 
 // ── Base ──────────────────────────────────────────────────────────────────────
@@ -64,8 +69,6 @@ export class PeerInitializingState implements BasePeerState {
     const next = new PeerReadyState(
       this.peer,
       id,
-      new Map(),
-      new Map(),
       this.maxRetries,
       this.baseRetryDelay,
       this.ctx,
@@ -103,8 +106,6 @@ export class PeerInitializingState implements BasePeerState {
     const next = new PeerDisconnectedState(
       this.peer,
       "",
-      new Map(),
-      new Map(),
       0,
       this.maxRetries,
       this.baseRetryDelay,
@@ -133,24 +134,16 @@ export class PeerInitializingState implements BasePeerState {
 
 export class PeerReadyState implements BasePeerState {
   public readonly _tag = "ready";
-  private readonly signalingService: SignalingService;
-  private readonly callCoordinators: Map<string, CallCoordinator> = new Map();
 
   constructor(
     public readonly peer: Peer,
     public readonly peerId: string,
-    public readonly connections: Map<string, ConnectionMachine>,
-    public readonly calls: Map<string, CallCoordinator>,
     public readonly maxRetries: number,
     public readonly baseRetryDelay: number,
     private ctx: PeerContext,
   ) {
     log.info(`✅ PeerReadyState created — peerId: ${peerId}`);
-    this.signalingService = new SignalingService({
-      getConnection: (remotePeerId) => this.getConnection(remotePeerId),
-      emit: (event) => this.ctx.emit(event),
-      notifyChange: () => this.ctx.notifyChange(),
-    });
+    
     this.peer.on("connection", this.onConnection);
     this.peer.on("call", this.onIncomingCall);
     this.peer.on("disconnected", this.onDisconnected);
@@ -158,170 +151,22 @@ export class PeerReadyState implements BasePeerState {
     this.peer.on("close", this.onClose);
   }
 
-  public connect(remotePeerId: string) {
-    log.info(`📤 connect("${remotePeerId}") called`);
-
-    for (const childMachine of this.connections.values()) {
-      const child = childMachine.getState();
-      if (
-        (child._tag === "connecting" || child._tag === "open") &&
-        child.remotePeerId === remotePeerId
-      ) {
-        log.warn(
-          `  → duplicate connection to "${remotePeerId}" — skipping (existing state: ${child._tag})`,
-        );
-        return;
-      }
-    }
-
-    const connection = this.peer.connect(remotePeerId);
-    log.debug(
-      `  → PeerJS connection created, connectionId: ${connection.connectionId}`,
-    );
-    const child = this.spawnConnectionChild(
-      connection,
-      connection.connectionId,
-      remotePeerId,
-    );
-    this.connections.set(connection.connectionId, child);
-    this.ctx.bumpVersion();
-  }
-
-  public call(remotePeerId: string, localStream: MediaStream) {
-    log.info(`📞 call("${remotePeerId}") called`);
-
-    // Prevent duplicate
-    for (const coordinator of this.calls.values()) {
-      const child = coordinator.callMachine.getState();
-      if (
-        (child._tag === "ringing" ||
-          child._tag === "connecting" ||
-          child._tag === "live") &&
-        child.remotePeerId === remotePeerId
-      ) {
-        log.warn(
-          `  → duplicate call to "${remotePeerId}" — skipping (existing state: ${child._tag})`,
-        );
-        return;
-      }
-    }
-
-    const call = this.peer.call(remotePeerId, localStream);
-    log.debug(`  → PeerJS call created, callId: ${call.connectionId}`);
-    const coordinator = this.spawnCallCoordinator(
-      call,
-      call.connectionId,
-      remotePeerId,
-      "outbound",
-    );
-
-    this.calls.set(call.connectionId, coordinator);
-    this.ctx.bumpVersion();
-  }
-
-  private spawnCallCoordinator(
-    call: MediaConnection,
-    callId: string,
-    remotePeerId: string,
-    direction: "inbound" | "outbound",
-  ): CallCoordinator {
-    const config: CallCoordinatorConfig = {
-      call,
-      callId,
-      remotePeerId,
-      direction,
-      signalingService: this.signalingService,
-      onEnded: (callId, event) => {
-        if (event.type === 'call.ended') {
-          this.removeCall(callId, { type: 'call.ended', callId });
-        } else if (event.type === 'call.error') {
-          this.removeCall(callId, { type: 'call.error', callId, error: event.error });
-        } else if (event.type === 'call.rejected') {
-          this.removeCall(callId, { type: 'call.rejected', callId, remotePeerId });
-        } else if (event.type === 'call.declined') {
-          this.removeCall(callId, { type: 'call.declined', callId, remotePeerId });
-        }
-      },
-      onActive: (callId, remoteStream) => {
-        this.ctx.emit({ type: 'call.active', callId, remotePeerId, remoteStream });
-      },
-      onHeld: (callId) => {
-        this.ctx.emit({ type: 'call.held', callId, remotePeerId });
-      },
-      onResumed: (callId, remoteStream) => {
-        this.ctx.emit({ type: 'call.resumed', callId, remotePeerId });
-      },
-      getConnection: (remotePeerId) => {
-        for (const childMachine of this.connections.values()) {
-          const child = childMachine.getState();
-          if (child._tag === "open" && child.remotePeerId === remotePeerId) {
-            return childMachine;
-          }
-        }
-        return null;
-      },
-      openConnection: (remotePeerId) => this.connect(remotePeerId),
-      removeConnection: (connectionId) => this.removeConnection(connectionId),
-      notifyChange: () => this.ctx.notifyChange(),
-    };
-
-    return new CallCoordinator(config);
-  }
-
-  private onIncomingCall = (call: MediaConnection) => {
-    log.info(
-      `📥 incoming call from "${call.peer}", callId: ${call.connectionId}`,
-    );
-    const coordinator = this.spawnCallCoordinator(
-      call,
-      call.connectionId,
-      call.peer,
-      "inbound",
-    );
-    this.calls.set(call.connectionId, coordinator);
-    this.ctx.bumpVersion();
-    this.ctx.emit({
-      type: "call.incoming",
-      callId: call.connectionId,
-      remotePeerId: call.peer,
-    });
-  };
-
-  private getConnection(remotePeerId: string) {
-    for (const childMachine of this.connections.values()) {
-      const child = childMachine.getState();
-      if (child._tag === "open" && child.remotePeerId === remotePeerId) {
-        return child;
-      }
-    }
-    return null;
-  }
-
   // ── PeerJS callbacks ─────────────────────────────────────────────────────
 
   private onConnection = (connection: DataConnection) => {
-    log.info(
-      `📥 incoming connection from "${connection.peer}", connectionId: ${connection.connectionId}`,
-    );
-    const child = this.spawnConnectionChild(
-      connection,
-      connection.connectionId,
-      connection.peer,
-    );
-    this.connections.set(connection.connectionId, child);
-    this.ctx.bumpVersion();
+    this.ctx.connectionManager.handleIncoming(connection);
+  };
+
+  private onIncomingCall = (call: MediaConnection) => {
+    this.ctx.callManager.handleIncoming(call);
   };
 
   private onDisconnected = () => {
-    log.warn(
-      '⚠️ PeerJS "disconnected" — peer lost connection to signaling server',
-    );
+    log.warn('⚠️ PeerJS "disconnected" — peer lost connection to signaling server');
     this.destroy();
     const next = new PeerDisconnectedState(
       this.peer,
       this.peerId,
-      this.connections,
-      this.calls,
       0,
       this.maxRetries,
       this.baseRetryDelay,
@@ -334,10 +179,9 @@ export class PeerReadyState implements BasePeerState {
   private onError = (error: PeerError<string>) => {
     log.error('❌ PeerJS "error" in ready state', error.type, error.message);
     if (isFatalError(error)) {
-      log.warn(
-        "  → fatal error — cleaning up children and transitioning to error state",
-      );
-      this.cleanupChildren();
+      log.warn("  → fatal error — cleaning up children and transitioning to error state");
+      this.ctx.connectionManager.cleanupAll();
+      this.ctx.callManager.cleanupAll();
       this.destroy();
       const next = new PeerErrorState(error);
       this.ctx.transition(next);
@@ -347,128 +191,13 @@ export class PeerReadyState implements BasePeerState {
 
   private onClose = () => {
     log.warn('⚠️ PeerJS "close" in ready state — destroying peer');
-    this.cleanupChildren();
+    this.ctx.connectionManager.cleanupAll();
+    this.ctx.callManager.cleanupAll();
     this.destroy();
     this.peer.destroy();
     const next = new PeerDestroyedState();
     this.ctx.transition(next);
   };
-
-  // ── Child helpers ────────────────────────────────────────────────────────
-
-  private spawnConnectionChild(
-    connection: DataConnection,
-    connectionId: string,
-    remotePeerId: string,
-  ): ConnectionMachine {
-    log.debug(
-      `  spawning ConnectionMachine for "${remotePeerId}" (id: ${connectionId})`,
-    );
-    const machine = new ConnectionMachine(
-      connection,
-      connectionId,
-      remotePeerId,
-      (id, data) => {
-        if (isSignalingMessage(data)) {
-          this.signalingService.handleMessage(id, data);
-          return;
-        }
-        this.ctx.emit({ type: "connection.data", connectionId: id, data });
-      },
-    );
-
-    machine.onTransition((next, prev) => {
-      log.info(
-        `  connection[${connectionId}] child transition: ${prev._tag} → ${next._tag}`,
-      );
-      if (next._tag === "open" && prev._tag === "connecting") {
-        this.ctx.emit({
-          type: "connection.opened",
-          connectionId,
-          remotePeerId,
-        });
-      }
-      if (next._tag === "closed") {
-        this.removeConnection(connectionId, {
-          type: "connection.closed",
-          connectionId,
-        });
-        return;
-      }
-      if (next._tag === "error") {
-        this.removeConnection(connectionId, {
-          type: "connection.error",
-          connectionId,
-          error: next.error,
-        });
-        return;
-      }
-      this.ctx.notifyChange();
-    });
-
-    return machine;
-  }
-
-  private removeConnection(connectionId: string, event?: PeerEmittedEvent) {
-    log.debug(`  removing connection ${connectionId}`);
-    const child = this.connections.get(connectionId);
-    if (child) child.destroy();
-    this.connections.delete(connectionId);
-    this.ctx.bumpVersion();
-    if (event) this.ctx.emit(event);
-  }
-
-  private removeCall(callId: string, event?: PeerEmittedEvent) {
-    log.debug(`  removing call ${callId}`);
-    const coordinator = this.calls.get(callId);
-    if (coordinator) coordinator.destroy();
-    this.calls.delete(callId);
-    this.ctx.bumpVersion();
-    if (event) this.ctx.emit(event);
-
-    // After removing a call, check if held calls remain with no live call
-    this.emitSelectionRequiredIfNeeded();
-  }
-
-  /**
-   * Emit `call.selectionRequired` when there are held calls but no live call.
-   * This signals the UI to show a call picker.
-   */
-  private emitSelectionRequiredIfNeeded() {
-    let hasLive = false;
-    const heldCallIds: string[] = [];
-
-    for (const [id, coord] of this.calls) {
-      const tag = coord.callMachine.getState()._tag;
-      if (tag === 'live') hasLive = true;
-      if (tag === 'held') heldCallIds.push(id);
-    }
-
-    if (!hasLive && heldCallIds.length > 0) {
-      log.info(`  📋 selectionRequired — ${heldCallIds.length} held call(s), no live call`);
-      this.ctx.emit({ type: 'call.selectionRequired', heldCallIds });
-    }
-  }
-
-  private cleanupChildren() {
-    log.debug(
-      `  cleaning up ${this.connections.size} connection(s) and ${this.calls.size} call(s)`,
-    );
-    for (const conn of this.connections.values()) {
-      try {
-        conn.destroy();
-      } catch (e) {
-        log.debug('  error during connection cleanup:', e);
-      }
-    }
-    for (const call of this.calls.values()) {
-      try {
-        call.destroy();
-      } catch (e) {
-        log.debug('  error during call cleanup:', e);
-      }
-    }
-  }
 
   public destroy() {
     log.debug("  PeerReadyState.destroy() — unregistering PeerJS listeners");
@@ -494,8 +223,6 @@ export class PeerDisconnectedState implements BasePeerState {
   constructor(
     public readonly peer: Peer,
     public readonly peerId: string,
-    public readonly connections: Map<string, ConnectionMachine>,
-    public readonly calls: Map<string, CallCoordinator>,
     initialRetryCount: number,
     public readonly maxRetries: number,
     public readonly baseRetryDelay: number,
@@ -567,23 +294,8 @@ export class PeerDisconnectedState implements BasePeerState {
   };
 
   private cleanupChildren() {
-    log.debug(
-      `  cleaning up ${this.connections.size} connection(s) and ${this.calls.size} call(s)`,
-    );
-    for (const conn of this.connections.values()) {
-      try {
-        conn.destroy();
-      } catch (e) {
-        log.debug('  error during connection cleanup:', e);
-      }
-    }
-    for (const call of this.calls.values()) {
-      try {
-        call.destroy();
-      } catch (e) {
-        log.debug('  error during call cleanup:', e);
-      }
-    }
+    this.ctx.connectionManager.cleanupAll();
+    this.ctx.callManager.cleanupAll();
   }
 
   public destroy() {

@@ -9,6 +9,9 @@ import type { ConnectionInfo } from '../connection/types';
 import type { CallMachine } from '../call/CallMachine';
 import type { ConnectionMachine } from '../connection/ConnectionMachine';
 import type { MediaMachine } from '../media/MediaManager';
+import { ConnectionManager } from '../connection/ConnectionManager';
+import { CallManager } from '../call/CallManager';
+import { SignalingService } from '../signaling';
 
 // ── Call/Media options ────────────────────────────────────────────────────────
 
@@ -30,9 +33,15 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   private pendingLocalStream: MediaStream | null = null;
   private mediaSubscriptions: Array<{ unsubscribe: () => void }> = [];
 
+  private connectionManager: ConnectionManager;
+  private callManager: CallManager;
+  private signalingService: SignalingService;
+  private readonly peer: Peer;
+
   constructor(input: { peer: Peer; maxRetries?: number; baseRetryDelay?: number }) {
     super();
 
+    this.peer = input.peer;
     const maxRetries = input.maxRetries ?? 5;
     const baseRetryDelay = input.baseRetryDelay ?? 1000;
 
@@ -42,7 +51,22 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       emit: (event) => this.emit(event),
       notifyChange: () => this.notifySubscribers(),
       bumpVersion: () => this.bumpVersion(),
+      get connectionManager() { return self.connectionManager; },
+      get callManager() { return self.callManager; },
     });
+
+    // We use a self reference for the getters above to avoid 'this' issues before super() finishes if we were in another context, 
+    // but here `this` is already available.
+    const self = this;
+
+    this.signalingService = new SignalingService({
+      getConnection: (remotePeerId) => this.connectionManager.getOpenConnection(remotePeerId),
+      emit: (event) => this.emit(event),
+      notifyChange: () => this.notifySubscribers(),
+    });
+
+    this.connectionManager = new ConnectionManager(ctx, this.signalingService);
+    this.callManager = new CallManager(input.peer, ctx, this.signalingService, this.connectionManager);
 
     this.currentState = new PeerInitializingState(input.peer, maxRetries, baseRetryDelay, ctx);
   }
@@ -123,7 +147,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     const state = this.requireReady(caller);
     if (!state) return null;
 
-    const coordinator = state.calls.get(callId);
+    const coordinator = this.callManager.getCall(callId);
     if (!coordinator) {
       this.log.warn(`${caller}() failed — call "${callId}" not found`);
       return null;
@@ -146,7 +170,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    */
   connect(remotePeerId: string): void {
     const state = this.requireReady('connect');
-    if (state) state.connect(remotePeerId);
+    if (state) this.connectionManager.connect(this.peer, remotePeerId);
   }
 
   /**
@@ -158,17 +182,15 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     if (!state) return false;
 
     // Find an open connection
-    for (const machine of state.connections.values()) {
-      const connState = machine.getState();
-      if (connState._tag === 'open' && connState.remotePeerId === remotePeerId) {
-        connState.send(data);
-        return true;
-      }
+    const connState = this.connectionManager.getOpenConnection(remotePeerId);
+    if (connState) {
+      connState.send(data);
+      return true;
     }
 
     // No open connection — try to create one
     this.log.debug(`send() — no open connection to "${remotePeerId}", connecting...`);
-    state.connect(remotePeerId);
+    this.connectionManager.connect(this.peer, remotePeerId);
     // Note: connection is async, so we can't send immediately.
     // The caller should listen for 'connection.opened' and then send.
     return false;
@@ -196,7 +218,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       return false;
     }
 
-    state.call(remotePeerId, stream);
+    this.callManager.call(this.peer, remotePeerId, stream);
     return true;
   }
 
@@ -283,10 +305,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   private hasLiveCall(): boolean {
     const state = this.getState();
     if (state._tag !== 'ready') return false;
-    for (const coordinator of state.calls.values()) {
-      if (coordinator.callMachine.getState()._tag === 'live') return true;
-    }
-    return false;
+    return this.callManager.hasLiveCall();
   }
 
   /**
@@ -295,14 +314,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   private holdAllLiveCalls(): void {
     const state = this.getState();
     if (state._tag !== 'ready') return;
-
-    for (const coordinator of state.calls.values()) {
-      const callState = coordinator.callMachine.getState();
-      if (callState._tag === 'live') {
-        this.log.info(`  auto-holding live call "${callState.callId}"`);
-        callState.hold();
-      }
-    }
+    this.callManager.holdAllLiveCalls();
   }
 
   // ── Query Methods (Immutable Snapshots) ─────────────────────────────────────
@@ -318,7 +330,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     let hasLive = false;
     let hasHeld = false;
 
-    for (const coordinator of state.calls.values()) {
+    for (const coordinator of this.callManager.getAll()) {
       const tag = coordinator.callMachine.getState()._tag;
       if (tag === 'live') hasLive = true;
       if (tag === 'held') hasHeld = true;
@@ -344,8 +356,9 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     }
 
     const calls: CallInfo[] = [];
-    for (const [callId, coordinator] of state.calls) {
+    for (const coordinator of this.callManager.getAll()) {
       const callState = coordinator.callMachine.getState();
+      const callId = callState.callId;
       let direction: 'inbound' | 'outbound' = 'outbound';
       if (callState._tag === 'ringing') {
         direction = 'inbound';
@@ -372,7 +385,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     }
 
     const connections: ConnectionInfo[] = [];
-    for (const machine of state.connections.values()) {
+    for (const machine of this.connectionManager.getAll()) {
       const connState = machine.getState();
       connections.push({
         connectionId: connState.connectionId,
@@ -392,7 +405,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     if (state._tag !== 'ready') {
       return null;
     }
-    const coordinator = state.calls.get(callId);
+    const coordinator = this.callManager.getCall(callId);
     return coordinator?.callMachine ?? null;
   }
 
@@ -405,7 +418,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     if (state._tag !== 'ready') {
       return null;
     }
-    return state.connections.get(connectionId) ?? null;
+    return this.connectionManager.getConnection(connectionId) ?? null;
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
