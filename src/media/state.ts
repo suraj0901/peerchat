@@ -23,13 +23,15 @@ export interface MediaContext extends MachineContext<MediaState> {
 
 // ── Base ──────────────────────────────────────────────────────────────────────
 
+export type MediaStateTag = 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied';
+
 export interface BaseMediaState {
-  readonly _tag: 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied';
+  readonly _tag: MediaStateTag;
   permissions: MediaPermissions;
   /** Update permissions in-place. Used by the permission monitor. */
   updatePermissions(permissions: MediaPermissions): void;
   destroy(): void;
-  is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }>;
+  is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -78,7 +80,7 @@ export class MediaIdleState implements BaseMediaState {
 
   public destroy() { }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -138,7 +140,7 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
     this.aborted = true;
   }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -218,7 +220,7 @@ export class MediaRequestingState implements BaseMediaState {
     this.controller.abort();
   }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -345,7 +347,7 @@ export class MediaActiveState implements BaseMediaState {
     }
   }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -427,7 +429,7 @@ export class MediaSwitchingState implements BaseMediaState {
     this.controller.abort();
   }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -505,7 +507,7 @@ export class MediaRecoveringState implements BaseMediaState {
     this.controller.abort();
   }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -533,7 +535,7 @@ export class MediaDeniedState implements BaseMediaState {
 
   public destroy() { }
 
-  public is<T extends 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied'>(tag: T): this is Extract<MediaState, { _tag: T }> {
+  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
     return isState(this, tag);
   }
 }

@@ -24,15 +24,17 @@ export interface PeerContext extends MachineContext<PeerState> {
 
 // ── Base ──────────────────────────────────────────────────────────────────────
 
+export type PeerStateTag =
+  | "initializing"
+  | "ready"
+  | "disconnected"
+  | "error"
+  | "destroyed";
+
 export interface BasePeerState {
-  readonly _tag:
-    | "initializing"
-    | "ready"
-    | "disconnected"
-    | "error"
-    | "destroyed";
+  readonly _tag: PeerStateTag;
   destroy(): void;
-  is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }>;
+  is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }>;
 }
 
 // ── PeerInitializingState ────────────────────────────────────────────────────
@@ -125,7 +127,7 @@ export class PeerInitializingState implements BasePeerState {
     this.peer.off("disconnected", this.onDisconnected);
   }
 
-  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
+  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -208,7 +210,7 @@ export class PeerReadyState implements BasePeerState {
     this.peer.off("close", this.onClose);
   }
 
-  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
+  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -305,7 +307,7 @@ export class PeerDisconnectedState implements BasePeerState {
     this.peer.off("close", this.onClose);
   }
 
-  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
+  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -318,7 +320,7 @@ export class PeerErrorState implements BasePeerState {
     log.error("💀 PeerErrorState created", lastError.type, lastError.message);
   }
   public destroy() {}
-  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
+  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -329,7 +331,7 @@ export class PeerDestroyedState implements BasePeerState {
     log.info("💀 PeerDestroyedState created");
   }
   public destroy() {}
-  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
+  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }

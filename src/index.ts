@@ -3,8 +3,8 @@
 export { PeerManager } from './peer/PeerManager';
 export type { CallOptions, AnswerOptions } from './peer/PeerManager';
 export { MediaMachine } from './media/MediaManager';
-export { CallMachine } from './call/CallMachine';
-export { ConnectionMachine } from './connection/ConnectionMachine';
+export type { CallMachine } from './call/CallMachine';
+export type { ConnectionMachine } from './connection/ConnectionMachine';
 
 // ── Factory Functions ─────────────────────────────────────────────────────────
 

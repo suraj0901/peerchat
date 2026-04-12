@@ -241,10 +241,10 @@ export class CallConnectingState implements BaseCallState {
   }
 }
 
-// ── CallLiveState ────────────────────────────────────────────────────────────
+// ── Abstract Base States ─────────────────────────────────────────────────────
 
-export class CallLiveState implements BaseCallState {
-  public readonly _tag = 'live';
+export abstract class BaseActiveCallState implements BaseCallState {
+  public abstract readonly _tag: CallStateTag;
 
   constructor(
     public readonly call: MediaConnection,
@@ -252,20 +252,76 @@ export class CallLiveState implements BaseCallState {
     public readonly remotePeerId: string,
     public readonly direction: CallDirection,
     public readonly remoteStream: MediaStream,
-    private ctx: CallContext
+    protected ctx: CallContext
   ) {
-    log.info(`🟢 CallLiveState[${callId}] — call is live with "${remotePeerId}"`);
     this.call.on('close', this.onClose);
     this.call.on('error', this.onError);
   }
 
   public hangUp(): CallEndedState {
-    log.info(`  call[${this.callId}].hangUp() — ending live call`);
+    log.info(`  call[${this.callId}].hangUp() — ending ${this._tag} call`);
     this.destroy();
     this.call.close();
     const next = new CallEndedState(this.callId, this.remotePeerId);
     this.ctx.transition(next);
     return next;
+  }
+
+  protected onClose = () => {
+    log.warn(`⚠️ call[${this.callId}] "close" while ${this._tag} — remote hung up`);
+    this.destroy();
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
+  };
+
+  protected onError = (error: Error | PeerError<string>) => {
+    log.error(`❌ call[${this.callId}] "error" while ${this._tag}`, error);
+    this.destroy();
+    const next = new CallErrorState(this.callId, this.remotePeerId, error);
+    this.ctx.transition(next);
+  };
+
+  public destroy() {
+    log.debug(`  ${this.constructor.name}[${this.callId}].destroy()`);
+    this.call.off('close', this.onClose);
+    this.call.off('error', this.onError);
+  }
+
+  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
+    return isState(this as unknown as CallState, tag);
+  }
+}
+
+export abstract class BaseTerminalCallState implements BaseCallState {
+  public abstract readonly _tag: CallStateTag;
+  
+  constructor(
+    public readonly callId: string,
+    public readonly remotePeerId: string,
+  ) {}
+
+  public destroy() { }
+
+  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
+    return isState(this as unknown as CallState, tag);
+  }
+}
+
+// ── CallLiveState ────────────────────────────────────────────────────────────
+
+export class CallLiveState extends BaseActiveCallState {
+  public readonly _tag = 'live';
+
+  constructor(
+    call: MediaConnection,
+    callId: string,
+    remotePeerId: string,
+    direction: CallDirection,
+    remoteStream: MediaStream,
+    ctx: CallContext
+  ) {
+    super(call, callId, remotePeerId, direction, remoteStream, ctx);
+    log.info(`🟢 CallLiveState[${callId}] — call is live with "${remotePeerId}"`);
   }
 
   /**
@@ -296,30 +352,6 @@ export class CallLiveState implements BaseCallState {
     this.ctx.transition(next);
     return next;
   }
-
-  private onClose = () => {
-    log.warn(`⚠️ call[${this.callId}] "close" while live — remote hung up`);
-    this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-  };
-
-  private onError = (error: Error | PeerError<string>) => {
-    log.error(`❌ call[${this.callId}] "error" while live`, error);
-    this.destroy();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error);
-    this.ctx.transition(next);
-  };
-
-  public destroy() {
-    log.debug(`  CallLiveState[${this.callId}].destroy()`);
-    this.call.off('close', this.onClose);
-    this.call.off('error', this.onError);
-  }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── CallHeldState ────────────────────────────────────────────────────────────
@@ -330,24 +362,22 @@ export class CallLiveState implements BaseCallState {
  * Remote incoming tracks are disabled.
  * The WebRTC connection remains alive.
  */
-export class CallHeldState implements BaseCallState {
+export class CallHeldState extends BaseActiveCallState {
   public readonly _tag = 'held';
 
   constructor(
-    public readonly call: MediaConnection,
-    public readonly callId: string,
-    public readonly remotePeerId: string,
-    public readonly direction: CallDirection,
-    public readonly remoteStream: MediaStream,
-    private ctx: CallContext
+    call: MediaConnection,
+    callId: string,
+    remotePeerId: string,
+    direction: CallDirection,
+    remoteStream: MediaStream,
+    ctx: CallContext
   ) {
+    super(call, callId, remotePeerId, direction, remoteStream, ctx);
     log.info(`⏸ CallHeldState[${callId}] — call held with "${remotePeerId}"`);
 
     // Disable all tracks (local outgoing + remote incoming)
     new TrackController(call, remoteStream).holdAll();
-
-    this.call.on('close', this.onClose);
-    this.call.on('error', this.onError);
   }
 
   /**
@@ -367,40 +397,6 @@ export class CallHeldState implements BaseCallState {
     );
     this.ctx.transition(next);
   }
-
-  /** Hang up while held — ends the call entirely */
-  public hangUp(): CallEndedState {
-    log.info(`  call[${this.callId}].hangUp() — ending held call`);
-    this.destroy();
-    this.call.close();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-    return next;
-  }
-
-  private onClose = () => {
-    log.warn(`⚠️ call[${this.callId}] "close" while held — remote hung up`);
-    this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-  };
-
-  private onError = (error: Error | PeerError<string>) => {
-    log.error(`❌ call[${this.callId}] "error" while held`, error);
-    this.destroy();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error);
-    this.ctx.transition(next);
-  };
-
-  public destroy() {
-    log.debug(`  CallHeldState[${this.callId}].destroy()`);
-    this.call.off('close', this.onClose);
-    this.call.off('error', this.onError);
-  }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── CallRemoteHeldState ──────────────────────────────────────────────────────
@@ -412,24 +408,22 @@ export class CallHeldState implements BaseCallState {
  * The WebRTC connection remains alive.
  * Only the remote peer can resume — triggered by a `call_resumed` signaling message.
  */
-export class CallRemoteHeldState implements BaseCallState {
+export class CallRemoteHeldState extends BaseActiveCallState {
   public readonly _tag = 'remoteHeld';
 
   constructor(
-    public readonly call: MediaConnection,
-    public readonly callId: string,
-    public readonly remotePeerId: string,
-    public readonly direction: CallDirection,
-    public readonly remoteStream: MediaStream,
-    private ctx: CallContext
+    call: MediaConnection,
+    callId: string,
+    remotePeerId: string,
+    direction: CallDirection,
+    remoteStream: MediaStream,
+    ctx: CallContext
   ) {
+    super(call, callId, remotePeerId, direction, remoteStream, ctx);
     log.info(`⏸ CallRemoteHeldState[${callId}] — remote peer held the call`);
 
     // Disable all tracks (local outgoing + remote incoming)
     new TrackController(call, remoteStream).holdAll();
-
-    this.call.on('close', this.onClose);
-    this.call.on('error', this.onError);
   }
 
   /**
@@ -449,70 +443,30 @@ export class CallRemoteHeldState implements BaseCallState {
     );
     this.ctx.transition(next);
   }
-
-  /** Hang up while remote-held — ends the call entirely */
-  public hangUp(): CallEndedState {
-    log.info(`  call[${this.callId}].hangUp() — ending remote-held call`);
-    this.destroy();
-    this.call.close();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-    return next;
-  }
-
-  private onClose = () => {
-    log.warn(`⚠️ call[${this.callId}] "close" while remote-held — remote hung up`);
-    this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-  };
-
-  private onError = (error: Error | PeerError<string>) => {
-    log.error(`❌ call[${this.callId}] "error" while remote-held`, error);
-    this.destroy();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error);
-    this.ctx.transition(next);
-  };
-
-  public destroy() {
-    log.debug(`  CallRemoteHeldState[${this.callId}].destroy()`);
-    this.call.off('close', this.onClose);
-    this.call.off('error', this.onError);
-  }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── Terminal States ──────────────────────────────────────────────────────────
 
-export class CallEndedState implements BaseCallState {
+export class CallEndedState extends BaseTerminalCallState {
   public readonly _tag = 'ended';
   constructor(
-    public readonly callId: string,
-    public readonly remotePeerId: string,
+    callId: string,
+    remotePeerId: string,
   ) {
+    super(callId, remotePeerId);
     log.info(`🔒 CallEndedState[${callId}]`);
-  }
-  public destroy() { }
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
   }
 }
 
-export class CallErrorState implements BaseCallState {
+export class CallErrorState extends BaseTerminalCallState {
   public readonly _tag = 'error';
   constructor(
-    public readonly callId: string,
-    public readonly remotePeerId: string,
+    callId: string,
+    remotePeerId: string,
     public readonly error: Error | PeerError<string>,
   ) {
+    super(callId, remotePeerId);
     log.error(`💀 CallErrorState[${callId}]`, error);
-  }
-  public destroy() { }
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
   }
 }
 
