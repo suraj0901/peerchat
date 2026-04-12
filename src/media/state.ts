@@ -1,4 +1,4 @@
-import type { MachineContext } from '../core';
+import { isState, type MachineContext } from '../core';
 import { createLogger } from '../core/logger';
 import type { MediaEmittedEvent } from './types';
 
@@ -27,6 +27,7 @@ export interface BaseMediaState {
   readonly _tag: 'idle' | 'checkingPermissions' | 'requesting' | 'active' | 'switching' | 'recovering' | 'denied';
   permissions: MediaPermissions;
   destroy(): void;
+  is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -72,6 +73,10 @@ export class MediaIdleState implements BaseMediaState {
   }
 
   public destroy() { }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 // ── MediaCheckingPermissionsState ────────────────────────────────────────────
@@ -125,6 +130,10 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
 
   public destroy() {
     this.aborted = true;
+  }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
   }
 }
 
@@ -199,6 +208,10 @@ export class MediaRequestingState implements BaseMediaState {
 
   public destroy() {
     this.controller.abort();
+  }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
   }
 }
 
@@ -321,6 +334,10 @@ export class MediaActiveState implements BaseMediaState {
       this.deviceChangeHandler = null;
     }
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 // ── MediaSwitchingState ──────────────────────────────────────────────────────
@@ -397,6 +414,10 @@ export class MediaSwitchingState implements BaseMediaState {
   public destroy() {
     this.controller.abort();
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 // ── MediaRecoveringState ─────────────────────────────────────────────────────
@@ -469,6 +490,10 @@ export class MediaRecoveringState implements BaseMediaState {
   public destroy() {
     this.controller.abort();
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 // ── MediaDeniedState ─────────────────────────────────────────────────────────
@@ -491,6 +516,10 @@ export class MediaDeniedState implements BaseMediaState {
   }
 
   public destroy() { }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 // ── Union ────────────────────────────────────────────────────────────────────

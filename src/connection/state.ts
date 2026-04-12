@@ -1,5 +1,5 @@
 import type { DataConnection, PeerError } from 'peerjs';
-import type { MachineContext } from '../core';
+import { isState, type MachineContext } from '../core';
 import { createLogger } from '../core/logger';
 
 const log = createLogger('connection');
@@ -13,6 +13,7 @@ export interface BaseConnectionState {
   readonly connectionId: string;
   readonly remotePeerId: string;
   destroy(): void;
+  is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }>;
 }
 
 const CONNECTION_TIMEOUT_MS = 15_000;
@@ -73,6 +74,10 @@ export class ConnectionConnectingState implements BaseConnectionState {
     this.connection.off('close', this.onClose);
     this.connection.off('error', this.onError);
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export class ConnectionOpenState implements BaseConnectionState {
@@ -129,6 +134,10 @@ export class ConnectionOpenState implements BaseConnectionState {
     this.connection.off('close', this.onClose);
     this.connection.off('error', this.onError);
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export class ConnectionClosedState implements BaseConnectionState {
@@ -140,6 +149,9 @@ export class ConnectionClosedState implements BaseConnectionState {
     log.info(`🔒 ConnectionClosedState[${connectionId}]`);
   }
   public destroy() {}
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export class ConnectionErrorState implements BaseConnectionState {
@@ -152,6 +164,9 @@ export class ConnectionErrorState implements BaseConnectionState {
     log.error(`💀 ConnectionErrorState[${connectionId}]`, error);
   }
   public destroy() {}
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export type ConnectionState =

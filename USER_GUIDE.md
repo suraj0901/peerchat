@@ -1,0 +1,968 @@
+# PeerChat User Guide
+
+A comprehensive guide to using PeerChat in your applications.
+
+## Table of Contents
+
+- [Introduction](#introduction)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+  - [Peer](#peer)
+  - [Media](#media)
+  - [Calls](#calls)
+  - [Data Channels](#data-channels)
+- [Simple API Reference](#simple-api-reference)
+  - [Creating a Peer](#creating-a-peer)
+  - [Creating Media](#creating-media)
+  - [Making Calls](#making-calls)
+  - [Handling Incoming Calls](#handling-incoming-calls)
+  - [Sending Messages](#sending-messages)
+  - [Managing Media](#managing-media)
+- [Event Reference](#event-reference)
+  - [Peer Events](#peer-events)
+  - [Call Events](#call-events)
+  - [Connection Events](#connection-events)
+  - [Media Events](#media-events)
+- [Common Patterns](#common-patterns)
+  - [Video Call with Auto Answer](#video-call-with-auto-answer)
+  - [Chat-Only with Data Channels](#chat-only-with-data-channels)
+  - [Screen Sharing](#screen-sharing)
+  - [Device Switching](#device-switching)
+  - [Mute/Unmute](#muteunmute)
+- [React Integration](#react-integration)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+
+---
+
+## Introduction
+
+PeerChat is a library that simplifies WebRTC communication by wrapping [PeerJS](https://peerjs.com/) with a state-machine-driven API. It handles:
+
+- **Video and audio calls** — initiate, answer, reject, and hang up
+- **Data channels** — real-time messaging between peers
+- **Media management** — camera/microphone access, device switching, screen sharing
+- **State management** — predictable lifecycle management via discriminated union states
+- **Reconnection** — automatic retry with exponential backoff
+
+### Architecture at a Glance
+
+```
+┌─────────────┐     ┌──────────────┐
+│  PeerManager│────▶│ MediaMachine │
+│             │     │              │
+│ - calls     │     │ - stream     │
+│ - connections│    │ - devices    │
+│ - signaling │     │ - permissions│
+└─────────────┘     └──────────────┘
+```
+
+Each component is an independent state machine that can be used alone or combined.
+
+---
+
+## Installation
+
+```bash
+npm install peerchat peerjs
+```
+
+> **Note:** `peerjs` is a peer dependency. You must install it separately — this lets you control the PeerJS version and avoid duplicate instances.
+
+### Browser Compatibility
+
+PeerChat works in all modern browsers that support WebRTC:
+- Chrome 74+
+- Firefox 67+
+- Safari 12.1+
+- Edge 79+
+
+---
+
+## Quick Start
+
+Get a peer-to-peer video call running in under 20 lines:
+
+```ts
+import { createPeer, createMedia, PeerEvents, CallEvents, MediaEvents } from 'peerchat';
+
+// Create instances
+const peer = createPeer();
+const media = createMedia();
+
+// Wire media to peer
+peer.attachMedia(media);
+
+// Wait for peer to be ready
+peer.on(PeerEvents.READY, ({ peerId }) => {
+  console.log('My ID:', peerId);
+  // Share this ID with the person you want to call
+});
+
+// Handle incoming calls
+peer.on(CallEvents.INCOMING, ({ callId }) => {
+  peer.answer(callId); // Answer with attached media
+});
+
+// Make a call
+peer.call('friend-peer-id');
+
+// Display remote video
+peer.on(CallEvents.ACTIVE, ({ remoteStream }) => {
+  videoElement.srcObject = remoteStream;
+});
+```
+
+---
+
+## Core Concepts
+
+### Peer
+
+The **Peer** represents your connection to the PeerJS signaling server. Every peer has a unique ID and can:
+
+- Connect to other peers
+- Send and receive data messages
+- Make and receive calls
+- Manage multiple simultaneous calls and connections
+
+### Media
+
+The **Media** component handles local media streams. It manages:
+
+- Camera and microphone access
+- Screen sharing
+- Device enumeration and switching
+- Permission monitoring
+- Audio/video mute toggling
+
+### Calls
+
+A **Call** is a WebRTC media connection between two peers. Calls have a lifecycle:
+
+```
+Incoming Call:  ringing ──answer──▶ connecting ──connected──▶ live ──hangup──▶ ended
+Outgoing Call:  ringing ──answer──▶ connecting ──connected──▶ live ──hangup──▶ ended
+```
+
+Each call has:
+- A unique `callId`
+- A `remotePeerId` — the other party
+- A `direction` — `'inbound'` or `'outbound'`
+- A state — `'ringing'`, `'connecting'`, `'live'`, `'ended'`, or `'error'`
+
+### Data Channels
+
+**Data channels** provide reliable, ordered messaging between peers. Each connection has:
+
+- A unique `connectionId`
+- A `remotePeerId`
+- A state — `'connecting'`, `'open'`, `'closed'`, or `'error'`
+
+Multiple connections to the same peer are supported. Data channels are independent of calls — you can chat without calling.
+
+---
+
+## Simple API Reference
+
+### Creating a Peer
+
+```ts
+import { createPeer } from 'peerchat';
+
+// Auto-generated peer ID
+const peer = createPeer();
+
+// Custom peer ID
+const peer = createPeer({ peerId: 'my-unique-id' });
+
+// With custom PeerJS server
+const peer = createPeer({
+  peerJsOptions: {
+    host: 'my-signaling-server.com',
+    port: 443,
+    secure: true,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turn:my-turn-server.com', username: 'user', credential: 'pass' },
+      ],
+    },
+  },
+  maxRetries: 5,        // Reconnection attempts
+  baseRetryDelay: 1000, // Base delay for exponential backoff (ms)
+});
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `peerId` | `string` | _auto-generated_ | Unique identifier for this peer |
+| `peerJsOptions` | `Peer.Options` | `{}` | PeerJS constructor options |
+| `logging` | `boolean` | `false` | Enable internal logging |
+| `maxRetries` | `number` | `5` | Maximum reconnection attempts |
+| `baseRetryDelay` | `number` | `1000` | Base delay (ms) for backoff |
+
+### Creating Media
+
+```ts
+import { createMedia } from 'peerchat';
+
+// Default: auto-check permissions
+const media = createMedia();
+
+// Manual permission handling
+const media = createMedia({ autoPermissions: false });
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `autoPermissions` | `boolean` | `true` | Check permissions on creation |
+
+### Making Calls
+
+```ts
+// Call using attached media (must call peer.attachMedia(media) first)
+peer.call('friend-id');
+
+// Call with explicit stream
+peer.call('friend-id', { stream: myStream });
+
+// Call with media constraints (acquires media first)
+peer.call('friend-id', { audio: true, video: true });
+
+// Audio-only call
+peer.call('friend-id', { audio: true, video: false });
+```
+
+#### `call(remotePeerId, options?)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `remotePeerId` | `string` | The peer ID to call |
+| `options` | `CallOptions` | Optional call configuration |
+
+**CallOptions:**
+
+```ts
+interface CallOptions {
+  stream?: MediaStream;   // Explicit stream (overrides attached media)
+  audio?: boolean;        // Audio constraint (acquires media if no stream)
+  video?: boolean;        // Video constraint (acquires media if no stream)
+}
+```
+
+### Handling Incoming Calls
+
+```ts
+import { CallEvents } from 'peerchat';
+
+// Listen for incoming calls
+peer.on(CallEvents.INCOMING, ({ callId, remotePeerId }) => {
+  console.log(`Incoming call from ${remotePeerId}`);
+
+  // Answer with attached media
+  peer.answer(callId);
+
+  // Or with explicit stream
+  // peer.answer(callId, { stream: myStream });
+
+  // Or reject
+  // peer.reject(callId);
+});
+
+// When call becomes active (remote stream available)
+peer.on(CallEvents.ACTIVE, ({ callId, remotePeerId, remoteStream }) => {
+  videoElement.srcObject = remoteStream;
+});
+
+// When call ends
+peer.on(CallEvents.ENDED, ({ callId }) => {
+  console.log('Call ended');
+  videoElement.srcObject = null;
+});
+
+// Call errors
+peer.on(CallEvents.ERROR, ({ callId, error }) => {
+  console.error('Call error:', error);
+});
+
+// Call rejected by remote peer
+peer.on(CallEvents.REJECTED, ({ callId, remotePeerId }) => {
+  console.log(`${remotePeerId} rejected the call`);
+});
+```
+
+#### `answer(callId, options?)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `callId` | `string` | The incoming call ID |
+| `options` | `AnswerOptions` | Optional answer configuration |
+
+**AnswerOptions:**
+
+```ts
+interface AnswerOptions {
+  stream?: MediaStream; // Explicit stream (overrides attached media)
+}
+```
+
+#### `reject(callId)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `callId` | `string` | The incoming call ID to reject |
+
+#### `hangUp(callId)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `callId` | `string` | The active call ID to hang up |
+
+### Sending Messages
+
+```ts
+import { ConnectionEvents } from 'peerchat';
+
+// Send a message (auto-connects if needed)
+peer.send('friend-id', { type: 'chat', text: 'Hello!' });
+
+// Receive messages
+peer.on(ConnectionEvents.DATA, ({ connectionId, remotePeerId, data }) => {
+  console.log(`Message from ${remotePeerId}:`, data);
+});
+
+// Connection opened
+peer.on(ConnectionEvents.OPENED, ({ connectionId, remotePeerId }) => {
+  console.log(`Connected to ${remotePeerId}`);
+});
+
+// Connection closed
+peer.on(ConnectionEvents.CLOSED, ({ connectionId }) => {
+  console.log('Connection closed');
+});
+```
+
+#### `send(remotePeerId, data)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `remotePeerId` | `string` | The peer ID to send to |
+| `data` | `any` | Serializable data (objects, strings, etc.) |
+
+> **Note:** `send()` auto-connects if no open connection exists. The connection is reused across calls.
+
+### Managing Media
+
+```ts
+import { MediaEvents, MediaEvents } from 'peerchat';
+
+// Attach media to peer
+peer.attachMedia(media);
+
+// Request camera and microphone
+const state = media.getState();
+if (state._tag === 'idle') {
+  state.request({ audio: true, video: true });
+}
+
+// When media is ready
+media.on(MediaEvents.STREAM_READY, ({ stream, mode }) => {
+  console.log('Media ready, mode:', mode); // 'camera' or 'screen'
+  previewElement.srcObject = stream;
+});
+
+// Screen sharing
+media.getState(); // MediaActiveState or MediaIdleState
+// If idle:
+// media.getState().requestScreen({ video: { displaySurface: 'monitor' } });
+
+// Stop media
+media.getState(); // MediaActiveState
+// media.getState().stop();
+
+// Mute/unmute (when media is active)
+const activeState = media.getState();
+if (activeState._tag === 'active') {
+  activeState.toggleAudio(); // Toggle microphone
+  activeState.toggleVideo(); // Toggle video
+}
+
+// Switch devices
+media.on(MediaEvents.DEVICES_UPDATED, ({ devices }) => {
+  console.log('Available devices:', devices);
+});
+
+// Switch to specific camera
+// media.getState().switchDevice('video', deviceId);
+
+// Check permissions
+media.on(MediaEvents.PERMISSION_STATUS, ({ permissions }) => {
+  console.log('Camera:', permissions.camera);
+  console.log('Microphone:', permissions.microphone);
+});
+
+// Handle permission denied
+media.on(MediaEvents.PERMISSION_DENIED, () => {
+  console.log('Permission denied');
+  // Can retry with: media.getState().retry();
+});
+
+// Handle track ended (e.g., user unplugged camera)
+media.on(MediaEvents.TRACK_ENDED, ({ kind }) => {
+  console.log(`${kind} track ended`);
+});
+
+// Clean up
+media.destroy();
+```
+
+#### Media Methods (on state objects after narrowing)
+
+```ts
+// From MediaIdleState
+state.request(constraints: MediaStreamConstraints);
+state.requestScreen(constraints?: MediaStreamConstraints);
+state.checkPermissions();
+
+// From MediaActiveState
+state.switchDevice(kind: 'audio' | 'video', deviceId: string);
+state.stop();
+state.toggleAudio();
+state.toggleVideo();
+
+// From MediaDeniedState
+state.retry();
+```
+
+---
+
+## Event Reference
+
+All events are strongly typed. Use the exported constants to avoid typos.
+
+### Peer Events
+
+```ts
+import { PeerEvents } from 'peerchat';
+```
+
+| Event | Constant | Payload | Description |
+|-------|----------|---------|-------------|
+| `peer.ready` | `PeerEvents.READY` | `{ peerId: string }` | Peer connected to signaling server |
+| `peer.disconnected` | — | — | Peer disconnected from server |
+| `peer.error` | `PeerEvents.ERROR` | `{ error: Error }` | Peer error occurred |
+
+### Call Events
+
+```ts
+import { CallEvents } from 'peerchat';
+```
+
+| Event | Constant | Payload | Description |
+|-------|----------|---------|-------------|
+| `call.incoming` | `CallEvents.INCOMING` | `{ callId, remotePeerId }` | Incoming call received |
+| `call.active` | `CallEvents.ACTIVE` | `{ callId, remotePeerId, remoteStream }` | Call is live with remote stream |
+| `call.ended` | `CallEvents.ENDED` | `{ callId }` | Call ended |
+| `call.error` | `CallEvents.ERROR` | `{ callId, error }` | Call error occurred |
+| `call.rejected` | `CallEvents.REJECTED` | `{ callId, remotePeerId }` | Remote peer rejected (timeout) |
+| `call.declined` | `CallEvents.DECLINED` | `{ callId, remotePeerId }` | Remote peer declined |
+
+### Connection Events
+
+```ts
+import { ConnectionEvents } from 'peerchat';
+```
+
+| Event | Constant | Payload | Description |
+|-------|----------|---------|-------------|
+| `connection.opened` | `ConnectionEvents.OPENED` | `{ connectionId, remotePeerId }` | Data channel opened |
+| `connection.closed` | `ConnectionEvents.CLOSED` | `{ connectionId }` | Data channel closed |
+| `connection.error` | `ConnectionEvents.ERROR` | `{ connectionId, error }` | Data channel error |
+| `connection.data` | `ConnectionEvents.DATA` | `{ connectionId, remotePeerId, data }` | Message received |
+
+### Media Events
+
+```ts
+import { MediaEvents } from 'peerchat';
+```
+
+| Event | Constant | Payload | Description |
+|-------|----------|---------|-------------|
+| `media.stream.ready` | `MediaEvents.STREAM_READY` | `{ stream, mode }` | Media stream acquired |
+| `media.stream.stopped` | `MediaEvents.STREAM_STOPPED` | — | Media stream stopped |
+| `media.stream.error` | `MediaEvents.STREAM_ERROR` | `{ error }` | Media error occurred |
+| `media.permission.denied` | `MediaEvents.PERMISSION_DENIED` | — | Permission denied |
+| `media.permission.status` | `MediaEvents.PERMISSION_STATUS` | `{ permissions }` | Permission status changed |
+| `media.track.ended` | `MediaEvents.TRACK_ENDED` | `{ kind }` | Media track ended |
+| `media.recovering` | `MediaEvents.RECOVERING` | — | Media recovering from track loss |
+| `media.device.switched` | `MediaEvents.DEVICE_SWITCHED` | `{ kind, stream }` | Device switched successfully |
+| `media.device.switch.failed` | `MediaEvents.DEVICE_SWITCH_FAILED` | `{ kind, error }` | Device switch failed |
+| `media.devices.updated` | `MediaEvents.DEVICES_UPDATED` | `{ devices }` | Available devices changed |
+| `media.audio.toggled` | `MediaEvents.AUDIO_TOGGLED` | `{ muted }` | Audio mute state changed |
+| `media.video.toggled` | `MediaEvents.VIDEO_TOGGLED` | `{ muted }` | Video mute state changed |
+
+---
+
+## Common Patterns
+
+### Video Call with Auto Answer
+
+```ts
+import { createPeer, createMedia, CallEvents, PeerEvents } from 'peerchat';
+
+const peer = createPeer();
+const media = createMedia();
+peer.attachMedia(media);
+
+// Auto-answer all incoming calls
+peer.on(CallEvents.INCOMING, ({ callId }) => {
+  peer.answer(callId);
+});
+
+peer.on(CallEvents.ACTIVE, ({ remoteStream }) => {
+  videoElement.srcObject = remoteStream;
+});
+
+peer.on(CallEvents.ENDED, () => {
+  videoElement.srcObject = null;
+});
+```
+
+### Chat-Only with Data Channels
+
+```ts
+import { createPeer, ConnectionEvents, PeerEvents } from 'peerchat';
+
+const peer = createPeer();
+
+peer.on(PeerEvents.READY, ({ peerId }) => {
+  console.log('My ID:', peerId);
+});
+
+// Send message
+function sendMessage(toPeerId: string, message: string) {
+  peer.send(toPeerId, { type: 'chat', text: message, timestamp: Date.now() });
+}
+
+// Receive messages
+peer.on(ConnectionEvents.DATA, ({ remotePeerId, data }) => {
+  if (data.type === 'chat') {
+    console.log(`${remotePeerId}: ${data.text}`);
+  }
+});
+
+// Connection status
+peer.on(ConnectionEvents.OPENED, ({ remotePeerId }) => {
+  console.log(`Connected to ${remotePeerId}`);
+});
+
+peer.on(ConnectionEvents.CLOSED, ({ remotePeerId }) => {
+  console.log(`Disconnected from ${remotePeerId}`);
+});
+```
+
+### Screen Sharing
+
+```ts
+import { createMedia, MediaEvents } from 'peerchat';
+
+const media = createMedia();
+
+// Request screen share
+const state = media.getState();
+if (state._tag === 'idle' || state._tag === 'active') {
+  state.requestScreen({ video: { displaySurface: 'monitor' } });
+}
+
+// Display screen share
+media.on(MediaEvents.STREAM_READY, ({ stream, mode }) => {
+  if (mode === 'screen') {
+    videoElement.srcObject = stream;
+  }
+});
+
+// Stop screen share and return to camera
+media.on(MediaEvents.STREAM_STOPPED, () => {
+  // Re-request camera
+  const state = media.getState();
+  if (state._tag === 'idle') {
+    state.request({ audio: true, video: true });
+  }
+});
+```
+
+### Device Switching
+
+```ts
+import { createMedia, MediaEvents } from 'peerchat';
+
+const media = createMedia({ autoPermissions: false });
+
+// Request media first
+const state = media.getState();
+if (state._tag === 'idle') {
+  state.request({ audio: true, video: true });
+}
+
+// Get available devices
+media.on(MediaEvents.DEVICES_UPDATED, async ({ devices }) => {
+  const videoDevices = devices.filter(d => d.kind === 'videoinput');
+  console.log('Available cameras:', videoDevices);
+});
+
+// Switch to a different camera
+media.on(MediaEvents.STREAM_READY, ({ stream }) => {
+  // Later, when user wants to switch:
+  const activeState = media.getState();
+  if (activeState._tag === 'active') {
+    // activeState.switchDevice('video', 'device-id-from-updated-list');
+  }
+});
+```
+
+### Mute/Unmute
+
+```ts
+// Toggle audio (microphone)
+const state = media.getState();
+if (state._tag === 'active') {
+  state.toggleAudio();
+}
+
+// Toggle video (camera)
+const state = media.getState();
+if (state._tag === 'active') {
+  state.toggleVideo();
+}
+
+// Listen for mute changes
+media.on(MediaEvents.AUDIO_TOGGLED, ({ muted }) => {
+  console.log('Microphone:', muted ? 'muted' : 'unmuted');
+});
+
+media.on(MediaEvents.VIDEO_TOGGLED, ({ muted }) => {
+  console.log('Camera:', muted ? 'off' : 'on');
+});
+```
+
+---
+
+## React Integration
+
+### Basic Pattern with `useSyncExternalStore`
+
+```tsx
+import { useRef, useEffect, useSyncExternalStore } from 'react';
+import { createPeer, createMedia } from 'peerchat';
+import type { PeerState } from 'peerchat';
+
+function usePeerManager() {
+  const peerRef = useRef<ReturnType<typeof createPeer>>();
+
+  if (!peerRef.current) {
+    peerRef.current = createPeer();
+  }
+
+  const { state } = useSyncExternalStore(
+    (cb) => peerRef.current!.subscribe(cb).unsubscribe,
+    () => peerRef.current!.getSnapshot(),
+  );
+
+  useEffect(() => () => peerRef.current?.destroy(), []);
+
+  return { peer: peerRef.current!, state: state.state as PeerState };
+}
+
+function VideoCall() {
+  const { peer, state } = usePeerManager();
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Handle active calls
+  if (state._tag === 'ready') {
+    for (const [callId, coordinator] of state.calls) {
+      const callState = coordinator.callMachine.getState();
+      if (callState._tag === 'live' && videoRef.current) {
+        videoRef.current.srcObject = callState.remoteStream;
+      }
+    }
+  }
+
+  return <video ref={videoRef} autoPlay playsInline />;
+}
+```
+
+### Force-Update Pattern (for Map mutations)
+
+```tsx
+import { useReducer, useEffect } from 'react';
+
+function useMachineState<S>(machine: {
+  subscribe: (cb: () => void) => { unsubscribe: () => void };
+  getState: () => S;
+}): S {
+  const [, forceUpdate] = useReducer((c: number) => c + 1, 0);
+  useEffect(() => machine.subscribe(forceUpdate).unsubscribe, [machine]);
+  return machine.getState();
+}
+
+// Usage
+function ChatApp() {
+  const peer = useRef(createPeer()).current;
+  const state = useMachineState(peer);
+
+  // Re-renders on any state change
+  if (state._tag === 'ready') {
+    return <div>Connected as {state.peerId}</div>;
+  }
+
+  return <div>Connecting...</div>;
+}
+```
+
+### Full Example
+
+A complete React application is available in [`example-react/`](./example-react/). To run it:
+
+```bash
+cd example-react
+npm install
+npm run dev
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### "Peer is not connected to the signaling server"
+
+**Cause:** The peer hasn't completed initialization before you tried to use it.
+
+**Fix:** Wait for the `READY` event:
+
+```ts
+peer.on(PeerEvents.READY, ({ peerId }) => {
+  // Now safe to make calls
+  peer.call('friend-id');
+});
+```
+
+#### "Media permission denied"
+
+**Cause:** User denied browser permission prompt, or permissions blocked.
+
+**Fix:** Handle the denied state and offer retry:
+
+```ts
+media.on(MediaEvents.PERMISSION_DENIED, () => {
+  // Inform user they need to enable permissions
+  // In browser settings, or retry if they change their mind
+  const state = media.getState();
+  if (state._tag === 'denied') {
+    // state.retry();
+  }
+});
+```
+
+#### "No remote video"
+
+**Possible causes:**
+1. Call not yet active — wait for `CallEvents.ACTIVE`
+2. Remote peer didn't answer — check `CallEvents.REJECTED` or `CallEvents.DECLINED`
+3. Stream not attached to video element — ensure `videoElement.srcObject = remoteStream`
+
+**Debug steps:**
+```ts
+peer.on(CallEvents.ACTIVE, ({ callId, remoteStream }) => {
+  console.log('Call active, stream:', remoteStream);
+  console.log('Tracks:', remoteStream.getTracks());
+  videoElement.srcObject = remoteStream;
+});
+
+peer.on(CallEvents.ERROR, ({ callId, error }) => {
+  console.error('Call error:', error);
+});
+```
+
+#### "Data channel not opening"
+
+**Cause:** The remote peer may not be online, or connection failed.
+
+**Fix:** Check connection state and error events:
+
+```ts
+peer.on(ConnectionEvents.OPENED, ({ connectionId, remotePeerId }) => {
+  console.log(`Connected to ${remotePeerId}`);
+});
+
+peer.on(ConnectionEvents.ERROR, ({ connectionId, error }) => {
+  console.error('Connection error:', error);
+});
+
+peer.on(ConnectionEvents.CLOSED, ({ connectionId }) => {
+  console.log('Connection closed, may need to reconnect');
+});
+```
+
+#### "Peer disconnected and not reconnecting"
+
+**Cause:** Network issue or PeerJS server unavailable.
+
+**Fix:** The library auto-reconnects by default. To customize:
+
+```ts
+const peer = createPeer({
+  maxRetries: 10,        // More attempts
+  baseRetryDelay: 500,   // Faster initial retries
+});
+```
+
+### Debug Mode
+
+Enable logging to see internal state transitions:
+
+```ts
+import { createPeer, setLogging } from 'peerchat';
+
+setLogging(true);
+const peer = createPeer();
+```
+
+### Browser DevTools
+
+- **Chrome:** `chrome://webrtc-internals` — see all WebRTC connections
+- **Firefox:** `about:webrtc` — similar diagnostics
+
+---
+
+## FAQ
+
+### Do I need a signaling server?
+
+PeerJS provides a free public signaling server by default. For production, you should run your own PeerServer:
+
+```bash
+npm install peer
+npx peerjs --port 9000
+```
+
+Then configure PeerChat to use it:
+
+```ts
+const peer = createPeer({
+  peerJsOptions: {
+    host: 'your-server.com',
+    port: 9000,
+    secure: false,
+  },
+});
+```
+
+### How many simultaneous calls are supported?
+
+Theoretically unlimited, but practical limits depend on:
+- **Browser** — Chrome supports ~256 concurrent WebRTC connections
+- **Bandwidth** — each video call uses 1-4 Mbps
+- **CPU** — encoding/decoding video is CPU-intensive
+
+### Can I use PeerChat without PeerJS?
+
+No. PeerChat is specifically a wrapper around PeerJS. If you need raw WebRTC without PeerJS, consider other libraries.
+
+### Is PeerChat suitable for production?
+
+PeerChat is designed for production use with features like:
+- Automatic reconnection with exponential backoff
+- State machine architecture preventing invalid states
+- TypeScript for compile-time safety
+- React integration via `useSyncExternalStore`
+
+However, always test thoroughly for your specific use case.
+
+### How does PeerChat handle NAT/firewalls?
+
+PeerJS uses STUN/TURN servers for NAT traversal. By default, it uses Google's public STUN server. For enterprise deployments, configure your own TURN server:
+
+```ts
+const peer = createPeer({
+  peerJsOptions: {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+          urls: 'turn:your-turn-server.com',
+          username: 'user',
+          credential: 'pass',
+        },
+      ],
+    },
+  },
+});
+```
+
+### Can I use PeerChat with Vue, Svelte, or Angular?
+
+Yes! The state machine API is framework-agnostic:
+
+**Vue:**
+```ts
+import { ref, onMounted, onUnmounted } from 'vue';
+
+export function usePeer() {
+  const peer = createPeer();
+  const state = ref(peer.getState());
+
+  const sub = peer.subscribe(() => {
+    state.value = peer.getState();
+  });
+
+  onUnmounted(() => {
+    sub.unsubscribe();
+    peer.destroy();
+  });
+
+  return { peer, state };
+}
+```
+
+**Svelte:**
+```ts
+import { readable } from 'svelte/store';
+
+export function createPeerStore() {
+  const peer = createPeer();
+  return readable(peer.getState(), (set) => {
+    const sub = peer.subscribe(() => set(peer.getState()));
+    return () => {
+      sub.unsubscribe();
+      peer.destroy();
+    };
+  });
+}
+```
+
+### What's the difference between Simple and Advanced API?
+
+| Feature | Simple API | Advanced API |
+|---------|-----------|--------------|
+| Entry point | `createPeer()` | `new PeerManager()` |
+| Methods | `peer.call()`, `peer.send()` | State narrowing + method calls |
+| State access | Query methods | Direct machine subscription |
+| Use case | App development | Framework integrations |
+
+**Use the Simple API unless you need fine-grained control.**
+
+---
+
+## Next Steps
+
+- Read the [Developer Guide](./DEVELOPER_GUIDE.md) for architecture details and contribution guidelines
+- Explore the [example React app](./example-react/) for a complete working demo
+- Check the [API reference in README](./README.md) for detailed type definitions

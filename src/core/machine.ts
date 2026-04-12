@@ -20,6 +20,17 @@ export interface CallMachineFactory {
   }): CallMachine;
 }
 
+/**
+ * Type-safe state checker helper.
+ * Usage: state.is('initializing') — narrows type via TypeScript type guard.
+ */
+export function isState<S extends { _tag: string }, T extends S['_tag']>(
+  state: S,
+  tag: T,
+): state is Extract<S, { _tag: T }> {
+  return state._tag === tag;
+}
+
 export abstract class AbstractMachine<S extends { destroy(): void }, E extends { type: string } = never> {
   protected currentState!: S;
   protected abstract readonly log: Logger;

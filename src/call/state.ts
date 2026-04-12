@@ -1,6 +1,6 @@
 import type { MediaConnection, PeerError } from 'peerjs';
 
-import type { MachineContext } from '../core';
+import { isState, type MachineContext } from '../core';
 import { createLogger } from '../core/logger';
 
 const log = createLogger('call');
@@ -16,6 +16,7 @@ export interface BaseCallState {
   readonly callId: string;
   readonly remotePeerId: string;
   destroy(): void;
+  is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }>;
 }
 
 const RINGING_TIMEOUT_MS = 30_000;
@@ -84,6 +85,10 @@ export class CallRingingState implements BaseCallState {
     clearTimeout(this.timer);
     this.call.off('close', this.onClose);
     this.call.off('error', this.onError);
+  }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
   }
 }
 
@@ -154,6 +159,10 @@ export class CallConnectingState implements BaseCallState {
     this.call.off('close', this.onClose);
     this.call.off('error', this.onError);
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export class CallLiveState implements BaseCallState {
@@ -200,6 +209,10 @@ export class CallLiveState implements BaseCallState {
     this.call.off('close', this.onClose);
     this.call.off('error', this.onError);
   }
+
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export class CallEndedState implements BaseCallState {
@@ -211,6 +224,9 @@ export class CallEndedState implements BaseCallState {
     log.info(`🔒 CallEndedState[${callId}]`);
   }
   public destroy() { }
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export class CallErrorState implements BaseCallState {
@@ -223,6 +239,9 @@ export class CallErrorState implements BaseCallState {
     log.error(`💀 CallErrorState[${callId}]`, error);
   }
   public destroy() { }
+  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+    return isState(this, tag);
+  }
 }
 
 export type CallState = CallRingingState | CallConnectingState | CallLiveState | CallEndedState | CallErrorState;
