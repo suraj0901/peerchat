@@ -51,22 +51,21 @@ export abstract class AbstractMachine<S extends { destroy(): void }, E extends {
   }
 
   protected createContext<C extends MachineContext<S>>(additionalCtx: Omit<C, 'transition'> = {} as Omit<C, 'transition'>): C {
-    return {
-      transition: (nextState: S) => {
-        const prevState = this.currentState;
-        if (prevState !== nextState) {
-          const prevTag = (prevState as any)?._tag ?? 'unknown';
-          const nextTag = (nextState as any)?._tag ?? 'unknown';
-          this.log.info(`⏭ transition: ${prevTag} → ${nextTag}`);
-          this.currentState = nextState;
-          this.transitionListeners.forEach(l => l(nextState, prevState));
-          this.stateSubscribers.forEach(s => s());
-        } else {
-          this.log.debug('⏭ transition skipped (same state)');
-        }
-      },
-      ...additionalCtx
-    } as C;
+    const ctx = additionalCtx as unknown as C;
+    ctx.transition = (nextState: S) => {
+      const prevState = this.currentState;
+      if (prevState !== nextState) {
+        const prevTag = (prevState as any)?._tag ?? 'unknown';
+        const nextTag = (nextState as any)?._tag ?? 'unknown';
+        this.log.info(`⏭ transition: ${prevTag} → ${nextTag}`);
+        this.currentState = nextState;
+        this.transitionListeners.forEach(l => l(nextState, prevState));
+        this.stateSubscribers.forEach(s => s());
+      } else {
+        this.log.debug('⏭ transition skipped (same state)');
+      }
+    };
+    return ctx;
   }
 
   public getState(): S {

@@ -47,6 +47,8 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
 
     this.log.info('🔧 PeerManager created', { maxRetries, baseRetryDelay, peerId: input.peer.id });
 
+    const self = this;
+
     const ctx = this.createContext<PeerContext>({
       emit: (event) => this.emit(event),
       notifyChange: () => this.notifySubscribers(),
@@ -54,10 +56,6 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       get connectionManager() { return self.connectionManager; },
       get callManager() { return self.callManager; },
     });
-
-    // We use a self reference for the getters above to avoid 'this' issues before super() finishes if we were in another context, 
-    // but here `this` is already available.
-    const self = this;
 
     this.signalingService = new SignalingService({
       getConnection: (remotePeerId) => this.connectionManager.getOpenConnection(remotePeerId),
