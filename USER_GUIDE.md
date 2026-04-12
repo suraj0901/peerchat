@@ -19,6 +19,13 @@ A comprehensive guide to using PeerChat in your applications.
   - [Handling Incoming Calls](#handling-incoming-calls)
   - [Sending Messages](#sending-messages)
   - [Managing Media](#managing-media)
+- [Advanced API Reference](#advanced-api-reference)
+  - [State Machine Architecture](#state-machine-architecture)
+  - [State Narrowing with `is()`](#state-narrowing-with-is)
+  - [Peer States](#peer-states)
+  - [Call States](#call-states)
+  - [Connection States](#connection-states)
+  - [Media States](#media-states)
 - [Event Reference](#event-reference)
   - [Peer Events](#peer-events)
   - [Call Events](#call-events)
@@ -367,7 +374,7 @@ peer.attachMedia(media);
 
 // Request camera and microphone
 const state = media.getState();
-if (state._tag === 'idle') {
+if (state.is('idle')) {
   state.request({ audio: true, video: true });
 }
 
@@ -388,7 +395,7 @@ media.getState(); // MediaActiveState
 
 // Mute/unmute (when media is active)
 const activeState = media.getState();
-if (activeState._tag === 'active') {
+if (activeState.is('active')) {
   activeState.toggleAudio(); // Toggle microphone
   activeState.toggleVideo(); // Toggle video
 }
@@ -425,18 +432,18 @@ media.destroy();
 #### Media Methods (on state objects after narrowing)
 
 ```ts
-// From MediaIdleState
+// From MediaIdleState (use state.is('idle') to narrow)
 state.request(constraints: MediaStreamConstraints);
 state.requestScreen(constraints?: MediaStreamConstraints);
 state.checkPermissions();
 
-// From MediaActiveState
+// From MediaActiveState (use state.is('active') to narrow)
 state.switchDevice(kind: 'audio' | 'video', deviceId: string);
 state.stop();
 state.toggleAudio();
 state.toggleVideo();
 
-// From MediaDeniedState
+// From MediaDeniedState (use state.is('denied') to narrow)
 state.retry();
 ```
 
@@ -576,7 +583,7 @@ const media = createMedia();
 
 // Request screen share
 const state = media.getState();
-if (state._tag === 'idle' || state._tag === 'active') {
+if (state.is('idle') || state.is('active')) {
   state.requestScreen({ video: { displaySurface: 'monitor' } });
 }
 
@@ -591,7 +598,7 @@ media.on(MediaEvents.STREAM_READY, ({ stream, mode }) => {
 media.on(MediaEvents.STREAM_STOPPED, () => {
   // Re-request camera
   const state = media.getState();
-  if (state._tag === 'idle') {
+  if (state.is('idle')) {
     state.request({ audio: true, video: true });
   }
 });
@@ -606,7 +613,7 @@ const media = createMedia({ autoPermissions: false });
 
 // Request media first
 const state = media.getState();
-if (state._tag === 'idle') {
+if (state.is('idle')) {
   state.request({ audio: true, video: true });
 }
 
@@ -620,7 +627,7 @@ media.on(MediaEvents.DEVICES_UPDATED, async ({ devices }) => {
 media.on(MediaEvents.STREAM_READY, ({ stream }) => {
   // Later, when user wants to switch:
   const activeState = media.getState();
-  if (activeState._tag === 'active') {
+  if (activeState.is('active')) {
     // activeState.switchDevice('video', 'device-id-from-updated-list');
   }
 });
@@ -631,13 +638,13 @@ media.on(MediaEvents.STREAM_READY, ({ stream }) => {
 ```ts
 // Toggle audio (microphone)
 const state = media.getState();
-if (state._tag === 'active') {
+if (state.is('active')) {
   state.toggleAudio();
 }
 
 // Toggle video (camera)
 const state = media.getState();
-if (state._tag === 'active') {
+if (state.is('active')) {
   state.toggleVideo();
 }
 
@@ -649,6 +656,270 @@ media.on(MediaEvents.AUDIO_TOGGLED, ({ muted }) => {
 media.on(MediaEvents.VIDEO_TOGGLED, ({ muted }) => {
   console.log('Camera:', muted ? 'off' : 'on');
 });
+```
+
+---
+
+## Advanced API Reference
+
+### State Machine Architecture
+
+PeerChat uses a composable state machine architecture where every resource is a machine with typed, discriminated-union states. Each state has a `_tag` property that identifies its type:
+
+```ts
+import { PeerManager, MediaMachine } from 'peerchat';
+import type { PeerState, MediaState } from 'peerchat';
+
+// Get current state
+const peerState = peer.getState();
+const mediaState = media.getState();
+
+// Check state type using _tag
+if (peerState._tag === 'ready') {
+  // TypeScript narrows to PeerReadyState
+  console.log('Peer ID:', peerState.peerId);
+}
+
+if (mediaState._tag === 'active') {
+  // TypeScript narrows to MediaActiveState
+  mediaState.toggleAudio();
+}
+```
+
+### State Narrowing with `is()`
+
+Every state object provides a type-safe `is()` method for checking state types with automatic TypeScript type narrowing:
+
+```ts
+const state = peer.getState();
+
+// Type-safe check with automatic type narrowing
+if (state.is('initializing')) {
+  // TypeScript narrows state to PeerInitializingState
+  console.log('Peer is initializing...');
+}
+
+if (state.is('ready')) {
+  // TypeScript narrows state to PeerReadyState
+  state.connect('remote-peer-id');
+  state.call('remote-peer-id', localStream);
+}
+
+if (state.is('disconnected')) {
+  // TypeScript narrows state to PeerDisconnectedState
+  console.log('Retry count:', state.retryCount);
+}
+
+if (state.is('error')) {
+  // TypeScript narrows state to PeerErrorState
+  console.error('Peer error:', state.lastError);
+}
+
+if (state.is('destroyed')) {
+  // TypeScript narrows state to PeerDestroyedState
+  console.log('Peer has been destroyed');
+}
+```
+
+The `is()` method is available on all state types:
+- **Peer states**: `'initializing'`, `'ready'`, `'disconnected'`, `'error'`, `'destroyed'`
+- **Call states**: `'ringing'`, `'connecting'`, `'live'`, `'ended'`, `'error'`
+- **Connection states**: `'connecting'`, `'open'`, `'closed'`, `'error'`
+- **Media states**: `'idle'`, `'checkingPermissions'`, `'requesting'`, `'active'`, `'switching'`, `'recovering'`, `'denied'`
+
+**Benefits of `is()`:**
+- ✅ Type-safe — only accepts valid state tags
+- ✅ Auto-narrowing — TypeScript automatically narrows the type after the check
+- ✅ IDE support — autocomplete and inline documentation
+- ✅ No runtime overhead — simple string comparison
+
+### Peer States
+
+```ts
+import type { PeerState } from 'peerchat';
+
+type PeerState =
+  | PeerInitializingState  // Waiting for PeerJS "open" event
+  | PeerReadyState         // Connected, can make calls/connections
+  | PeerDisconnectedState  // Lost connection to signaling server (auto-reconnecting)
+  | PeerErrorState         // Fatal error occurred
+  | PeerDestroyedState;    // Peer has been destroyed
+```
+
+#### PeerInitializingState (`_tag: 'initializing'`)
+
+```ts
+if (state.is('initializing')) {
+  state.peer;        // PeerJS instance
+  state.maxRetries;  // Maximum retry attempts
+  state.baseRetryDelay; // Base delay for exponential backoff
+}
+```
+
+#### PeerReadyState (`_tag: 'ready'`)
+
+```ts
+if (state.is('ready')) {
+  state.peerId;           // Unique peer ID
+  state.connections;      // Map of connection machines
+  state.calls;           // Map of call coordinators
+  
+  // Methods
+  state.connect('remote-peer-id');
+  state.call('remote-peer-id', localStream);
+}
+```
+
+#### PeerDisconnectedState (`_tag: 'disconnected'`)
+
+```ts
+if (state.is('disconnected')) {
+  state.peerId;
+  state.connections;
+  state.calls;
+  state.maxRetries;
+  state.baseRetryDelay;
+  
+  // Methods
+  state.reconnect(); // Force reconnection
+}
+```
+
+### Call States
+
+```ts
+import type { CallState } from 'peerchat';
+
+type CallState =
+  | CallRingingState     // Inbound call waiting for answer
+  | CallConnectingState  // Call answered, waiting for stream
+  | CallLiveState        // Call is active with remote stream
+  | CallEndedState       // Call ended normally
+  | CallErrorState;      // Call ended due to error
+```
+
+#### CallRingingState (`_tag: 'ringing'`)
+
+```ts
+if (callState.is('ringing')) {
+  callState.callId;
+  callState.remotePeerId;
+  callState.direction; // Always 'inbound'
+  
+  // Methods
+  callState.answer(localStream);
+  callState.reject();
+}
+```
+
+#### CallConnectingState (`_tag: 'connecting'`)
+
+```ts
+if (callState.is('connecting')) {
+  callState.callId;
+  callState.remotePeerId;
+  callState.direction; // 'inbound' or 'outbound'
+  
+  // Methods
+  callState.hangUp();
+}
+```
+
+#### CallLiveState (`_tag: 'live'`)
+
+```ts
+if (callState.is('live')) {
+  callState.callId;
+  callState.remotePeerId;
+  callState.direction;
+  callState.remoteStream; // MediaStream
+  
+  // Methods
+  callState.hangUp();
+}
+```
+
+### Connection States
+
+```ts
+import type { ConnectionState } from 'peerchat';
+
+type ConnectionState =
+  | ConnectionConnectingState // Waiting for data channel to open
+  | ConnectionOpenState       // Data channel open, can send/receive
+  | ConnectionClosedState     // Connection closed
+  | ConnectionErrorState;     // Connection failed
+```
+
+#### ConnectionOpenState (`_tag: 'open'`)
+
+```ts
+if (connState.is('open')) {
+  connState.connectionId;
+  connState.remotePeerId;
+  connState.connection; // PeerJS DataConnection
+  
+  // Methods
+  connState.send(data);
+  connState.close();
+}
+```
+
+### Media States
+
+```ts
+import type { MediaState } from 'peerchat';
+
+type MediaState =
+  | MediaIdleState               // No active media
+  | MediaCheckingPermissionsState // Checking browser permissions
+  | MediaRequestingState         // Requesting media stream
+  | MediaActiveState             // Stream active, can control
+  | MediaSwitchingState          // Switching devices
+  | MediaRecoveringState         // Recovering from track loss
+  | MediaDeniedState;            // Permission denied
+```
+
+#### MediaIdleState (`_tag: 'idle'`)
+
+```ts
+if (state.is('idle')) {
+  state.permissions; // { camera, microphone }
+  
+  // Methods
+  state.request({ audio: true, video: true });
+  state.requestScreen();
+  state.checkPermissions();
+}
+```
+
+#### MediaActiveState (`_tag: 'active'`)
+
+```ts
+if (state.is('active')) {
+  state.stream;          // MediaStream
+  state.mode;           // 'user' or 'screen'
+  state.audioMuted;
+  state.videoMuted;
+  state.permissions;
+  
+  // Methods
+  state.toggleAudio();
+  state.toggleVideo();
+  state.switchDevice('video', deviceId);
+  state.stop();
+}
+```
+
+#### MediaDeniedState (`_tag: 'denied'`)
+
+```ts
+if (state.is('denied')) {
+  state.permissions;
+  
+  // Methods
+  state.retry(); // Return to idle, allows retry
+}
 ```
 
 ---
@@ -683,11 +954,11 @@ function VideoCall() {
   const { peer, state } = usePeerManager();
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Handle active calls
-  if (state._tag === 'ready') {
+  // Handle active calls using is() method
+  if (state.is('ready')) {
     for (const [callId, coordinator] of state.calls) {
       const callState = coordinator.callMachine.getState();
-      if (callState._tag === 'live' && videoRef.current) {
+      if (callState.is('live') && videoRef.current) {
         videoRef.current.srcObject = callState.remoteStream;
       }
     }
@@ -716,8 +987,8 @@ function ChatApp() {
   const peer = useRef(createPeer()).current;
   const state = useMachineState(peer);
 
-  // Re-renders on any state change
-  if (state._tag === 'ready') {
+  // Re-renders on any state change using is()
+  if (state.is('ready')) {
     return <div>Connected as {state.peerId}</div>;
   }
 
@@ -765,7 +1036,7 @@ media.on(MediaEvents.PERMISSION_DENIED, () => {
   // Inform user they need to enable permissions
   // In browser settings, or retry if they change their mind
   const state = media.getState();
-  if (state._tag === 'denied') {
+  if (state.is('denied')) {
     // state.retry();
   }
 });

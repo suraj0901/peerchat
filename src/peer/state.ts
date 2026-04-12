@@ -27,7 +27,7 @@ export interface BasePeerState {
     | "error"
     | "destroyed";
   destroy(): void;
-  is<T extends this["_tag"]>(tag: T): this is Extract<this, { _tag: T }>;
+  is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }>;
 }
 
 // ── PeerInitializingState ────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ export class PeerInitializingState implements BasePeerState {
     this.peer.off("disconnected", this.onDisconnected);
   }
 
-  public is<T extends this["_tag"]>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -457,7 +457,7 @@ export class PeerReadyState implements BasePeerState {
     this.peer.off("close", this.onClose);
   }
 
-  public is<T extends this["_tag"]>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -571,7 +571,7 @@ export class PeerDisconnectedState implements BasePeerState {
     this.peer.off("close", this.onClose);
   }
 
-  public is<T extends this["_tag"]>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -584,7 +584,7 @@ export class PeerErrorState implements BasePeerState {
     log.error("💀 PeerErrorState created", lastError.type, lastError.message);
   }
   public destroy() {}
-  public is<T extends this["_tag"]>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -595,7 +595,7 @@ export class PeerDestroyedState implements BasePeerState {
     log.info("💀 PeerDestroyedState created");
   }
   public destroy() {}
-  public is<T extends this["_tag"]>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends "initializing" | "ready" | "disconnected" | "error" | "destroyed">(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
 }

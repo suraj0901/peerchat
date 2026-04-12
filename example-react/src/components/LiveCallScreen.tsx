@@ -22,9 +22,9 @@ export function LiveCallScreen({ callMachine, connectionMachine }: LiveCallScree
 
   const [chatOpen, setChatOpen] = useState(true);
 
-  if (callState._tag === "connecting") return <CallConnectingScreen callState={callState} />
+  if (callState.is("connecting")) return <CallConnectingScreen callState={callState} />
 
-  if (callState._tag != "live") return null
+  if (!callState.is("live")) return null
 
   return (
     <div className="call-layout">

@@ -79,7 +79,7 @@ export function HomeScreen({ peerState }: { peerState: PeerReadyState; }) {
     );
   }
 
-  const canCall = mediaState._tag === 'active' && targetId.trim().length > 0;
+  const canCall = mediaState.is('active') && targetId.trim().length > 0;
 
   return (
     <div className="screen screen--center">

@@ -16,7 +16,7 @@ export interface BaseCallState {
   readonly callId: string;
   readonly remotePeerId: string;
   destroy(): void;
-  is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }>;
+  is<T extends 'ringing' | 'connecting' | 'live' | 'ended' | 'error'>(tag: T): this is Extract<CallState, { _tag: T }>;
 }
 
 const RINGING_TIMEOUT_MS = 30_000;
@@ -87,7 +87,7 @@ export class CallRingingState implements BaseCallState {
     this.call.off('error', this.onError);
   }
 
-  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends 'ringing' | 'connecting' | 'live' | 'ended' | 'error'>(tag: T): this is Extract<CallState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -160,7 +160,7 @@ export class CallConnectingState implements BaseCallState {
     this.call.off('error', this.onError);
   }
 
-  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends 'ringing' | 'connecting' | 'live' | 'ended' | 'error'>(tag: T): this is Extract<CallState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -210,7 +210,7 @@ export class CallLiveState implements BaseCallState {
     this.call.off('error', this.onError);
   }
 
-  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends 'ringing' | 'connecting' | 'live' | 'ended' | 'error'>(tag: T): this is Extract<CallState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -224,7 +224,7 @@ export class CallEndedState implements BaseCallState {
     log.info(`🔒 CallEndedState[${callId}]`);
   }
   public destroy() { }
-  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends 'ringing' | 'connecting' | 'live' | 'ended' | 'error'>(tag: T): this is Extract<CallState, { _tag: T }> {
     return isState(this, tag);
   }
 }
@@ -239,7 +239,7 @@ export class CallErrorState implements BaseCallState {
     log.error(`💀 CallErrorState[${callId}]`, error);
   }
   public destroy() { }
-  public is<T extends this['_tag']>(tag: T): this is Extract<this, { _tag: T }> {
+  public is<T extends 'ringing' | 'connecting' | 'live' | 'ended' | 'error'>(tag: T): this is Extract<CallState, { _tag: T }> {
     return isState(this, tag);
   }
 }

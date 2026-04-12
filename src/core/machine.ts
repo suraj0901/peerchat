@@ -24,7 +24,7 @@ export interface CallMachineFactory {
  * Type-safe state checker helper.
  * Usage: state.is('initializing') — narrows type via TypeScript type guard.
  */
-export function isState<S extends { _tag: string }, T extends S['_tag']>(
+export function isState<S extends { _tag: string }, T extends string>(
   state: S,
   tag: T,
 ): state is Extract<S, { _tag: T }> {
