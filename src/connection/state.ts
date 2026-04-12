@@ -1,5 +1,5 @@
 import type { DataConnection, PeerError } from 'peerjs';
-import type { MachineContext } from '../core';
+import type { MachineContext, TransitionMap } from '../core';
 import { createLogger } from '../core/logger';
 
 const log = createLogger('connection');
@@ -159,3 +159,12 @@ export type ConnectionState =
   | ConnectionOpenState
   | ConnectionClosedState
   | ConnectionErrorState;
+
+// ── Transition Map ────────────────────────────────────────────────────────────
+
+export const CONNECTION_TRANSITIONS: TransitionMap<ConnectionState> = {
+  connecting: new Set(['open', 'closed', 'error']),
+  open: new Set(['closed', 'error']),
+  closed: new Set([]),
+  error: new Set([]),
+};

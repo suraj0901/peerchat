@@ -1,6 +1,6 @@
 import type { MediaConnection, PeerError } from 'peerjs';
 
-import type { MachineContext } from '../core';
+import type { MachineContext, TransitionMap } from '../core';
 import { createLogger } from '../core/logger';
 
 const log = createLogger('call');
@@ -226,3 +226,13 @@ export class CallErrorState implements BaseCallState {
 }
 
 export type CallState = CallRingingState | CallConnectingState | CallLiveState | CallEndedState | CallErrorState;
+
+// ── Transition Map ────────────────────────────────────────────────────────────
+
+export const CALL_TRANSITIONS: TransitionMap<CallState> = {
+  ringing: new Set(['connecting', 'ended', 'error']),
+  connecting: new Set(['live', 'ended', 'error']),
+  live: new Set(['ended', 'error']),
+  ended: new Set([]),
+  error: new Set([]),
+};

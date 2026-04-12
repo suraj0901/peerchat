@@ -2,6 +2,8 @@ import { createLogger, type Logger } from './logger';
 import type { MediaConnection } from 'peerjs';
 import type { CallDirection } from '../call/state';
 
+export type TransitionMap<S extends { _tag: string }> = Record<string, ReadonlySet<string>>;
+
 export interface MachineContext<S> {
   transition: (nextState: S) => void;
 }
@@ -22,18 +24,41 @@ export interface CallMachineFactory {
 export abstract class AbstractMachine<S extends { destroy(): void }, E extends { type: string } = never> {
   protected currentState!: S;
   protected abstract readonly log: Logger;
-  
+  protected transitionMap?: TransitionMap<S> = undefined;
+
+  private childMachines = new Set<AbstractMachine<any, any>>();
   private transitionListeners = new Set<(next: S, prev: S) => void>();
   private stateSubscribers = new Set<() => void>();
   private eventListeners = new Map<string, Set<(event: any) => void>>();
+
+  protected addChildMachine(child: AbstractMachine<any, any>): void {
+    this.childMachines.add(child);
+  }
+
+  protected removeChildMachine(child: AbstractMachine<any, any>): void {
+    this.childMachines.delete(child);
+  }
 
   protected createContext<C extends MachineContext<S>>(additionalCtx: Omit<C, 'transition'> = {} as Omit<C, 'transition'>): C {
     return {
       transition: (nextState: S) => {
         const prevState = this.currentState;
+        const prevTag = (prevState as any)?._tag ?? 'unknown';
+        const nextTag = (nextState as any)?._tag ?? 'unknown';
+
+        // Validate transition if a transition map is provided
+        if (this.transitionMap) {
+          const allowed = this.transitionMap.get(prevTag);
+          if (!allowed || !allowed.has(nextTag)) {
+            this.log.error(`⛔ illegal transition: ${prevTag} → ${nextTag}`);
+            throw new Error(
+              `Invalid state transition: "${prevTag}" → "${nextTag}". ` +
+              `Allowed from "${prevTag}": ${allowed ? [...allowed].join(', ') : '(none)'}`
+            );
+          }
+        }
+
         if (prevState !== nextState) {
-          const prevTag = (prevState as any)?._tag ?? 'unknown';
-          const nextTag = (nextState as any)?._tag ?? 'unknown';
           this.log.info(`⏭ transition: ${prevTag} → ${nextTag}`);
           this.currentState = nextState;
           this.transitionListeners.forEach(l => l(nextState, prevState));
@@ -99,6 +124,16 @@ export abstract class AbstractMachine<S extends { destroy(): void }, E extends {
 
   public destroy() {
     this.log.info('💀 destroy()');
+    // Auto-destroy all children
+    for (const child of this.childMachines) {
+      try {
+        child.destroy();
+      } catch {
+        /* ignore child errors during parent destruction */
+      }
+    }
+    this.childMachines.clear();
+
     if (this.currentState) {
       this.currentState.destroy();
     }

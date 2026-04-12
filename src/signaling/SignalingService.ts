@@ -87,4 +87,9 @@ export class SignalingService {
     log.debug(`Unregistering handler for callId ${callId}`);
     this.handlers.delete(callId);
   }
+
+  public destroy(): void {
+    log.debug(`SignalingService.destroy() — clearing ${this.handlers.size} handler(s)`);
+    this.handlers.clear();
+  }
 }

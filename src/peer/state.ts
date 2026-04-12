@@ -1,6 +1,6 @@
 import type { DataConnection, MediaConnection, Peer, PeerError } from "peerjs";
 import { ConnectionMachine } from "../connection/ConnectionMachine";
-import type { MachineContext } from "../core";
+import type { MachineContext, TransitionMap } from "../core";
 import { createLogger } from "../core/logger";
 import { isFatalError, type PeerEmittedEvent } from "./types";
 import type { CallState } from "../call";
@@ -8,6 +8,16 @@ import { SignalingService } from "../signaling";
 import { CallCoordinator, type CallCoordinatorConfig } from "../call/CallCoordinator";
 
 const log = createLogger("peer");
+
+// ── Transition Map ────────────────────────────────────────────────────────────
+
+export const PEER_TRANSITIONS: TransitionMap<PeerState> = {
+  initializing: new Set(["ready", "disconnected", "error", "destroyed"]),
+  ready: new Set(["disconnected", "error", "destroyed"]),
+  disconnected: new Set(["initializing", "error", "destroyed"]),
+  error: new Set(["destroyed"]),
+  destroyed: new Set([]),
+};
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -438,6 +448,7 @@ export class PeerReadyState implements BasePeerState {
 
   public destroy() {
     log.debug("  PeerReadyState.destroy() — unregistering PeerJS listeners");
+    this.signalingService.destroy();
     this.peer.off("connection", this.onConnection);
     this.peer.off("call", this.onIncomingCall);
     this.peer.off("disconnected", this.onDisconnected);
