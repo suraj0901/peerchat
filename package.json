@@ -23,7 +23,10 @@
   ],
   "scripts": {
     "build": "tsup",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "peerjs",
@@ -40,9 +43,13 @@
     "url": "https://github.com/suraj-jha/peerchat"
   },
   "devDependencies": {
+    "@fast-check/vitest": "^0.4.0",
     "@types/bun": "latest",
+    "@vitest/coverage-v8": "^4.1.4",
+    "jsdom": "^29.0.2",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.4"
   },
   "peerDependencies": {
     "peerjs": "^1.5.5"
