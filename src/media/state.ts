@@ -210,10 +210,11 @@ export class MediaActiveState implements BaseMediaState {
   public videoMuted: boolean;
   private trackHandlers: Array<{ track: MediaStreamTrack; handler: () => void }> = [];
   private deviceChangeHandler: (() => void) | null = null;
+  private _devices: MediaDeviceInfo[];
 
   constructor(
     public readonly stream: MediaStream,
-    public readonly devices: MediaDeviceInfo[],
+    devices: MediaDeviceInfo[],
     public readonly mode: MediaMode,
     public readonly constraints: MediaStreamConstraints,
     public permissions: MediaPermissions,
@@ -221,6 +222,7 @@ export class MediaActiveState implements BaseMediaState {
     audioMuted = false,
     videoMuted = false,
   ) {
+    this._devices = devices;
     this.audioMuted = audioMuted;
     this.videoMuted = videoMuted;
     // Apply mute state to tracks (important after device switch / recovery)
@@ -228,6 +230,11 @@ export class MediaActiveState implements BaseMediaState {
     stream.getVideoTracks().forEach(t => (t.enabled = !videoMuted));
     log.info(`🟢 MediaActiveState — mode: ${mode}, audioMuted: ${audioMuted}, videoMuted: ${videoMuted}, tracks: ${stream.getTracks().map(t => `${t.kind}:${t.label}`).join(', ')}`);
     this.startMonitoring();
+  }
+
+  /** @deprecated Use the getter `getDevices()` instead. The public `devices` property will be removed in a future version. */
+  public get devices(): readonly MediaDeviceInfo[] {
+    return this._devices;
   }
 
   private startMonitoring() {
@@ -243,7 +250,7 @@ export class MediaActiveState implements BaseMediaState {
     this.deviceChangeHandler = () => {
       void navigator.mediaDevices.enumerateDevices().then(devices => {
         log.debug(`  device change detected — ${devices.length} devices`);
-        (this as { devices: MediaDeviceInfo[] }).devices = devices;
+        this._devices = devices;
         this.ctx.emit({ type: 'media.devices.updated', devices });
       });
     };
@@ -293,7 +300,7 @@ export class MediaActiveState implements BaseMediaState {
     }
     log.info(`  🔀 switchDevice(${kind}, "${deviceId}")`);
     this.destroy();
-    const next = new MediaSwitchingState(this.stream, this.devices, this.mode, this.constraints, kind, deviceId, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
+    const next = new MediaSwitchingState(this.stream, [...this._devices], this.mode, this.constraints, kind, deviceId, this.permissions, this.ctx, this.audioMuted, this.videoMuted);
     this.ctx.transition(next);
   }
 

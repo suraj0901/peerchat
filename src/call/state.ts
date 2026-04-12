@@ -8,7 +8,7 @@ const log = createLogger('call');
 export type CallDirection = 'inbound' | 'outbound';
 
 export interface CallContext extends MachineContext<CallState> {
-  sendRemoteCallEndedMessage: (reason: 'rejected' | 'declined', callId: string) => void;
+  onCallEnded: (reason: 'rejected' | 'declined', callId: string) => void;
 }
 
 export interface BaseCallState {
@@ -48,7 +48,7 @@ export class CallRingingState implements BaseCallState {
 
   public reject(): void {
     log.info(`  call[${this.callId}].reject()`);
-    this.ctx.sendRemoteCallEndedMessage('rejected', this.callId);
+    this.ctx.onCallEnded('rejected', this.callId);
     this.destroy();
     this.call.close();
     const next = new CallEndedState(this.callId, this.remotePeerId);
@@ -108,7 +108,7 @@ export class CallConnectingState implements BaseCallState {
   public hangUp() {
     log.info(`  call[${this.callId}].hangUp() while connecting`);
     if (this.direction === 'outbound') {
-      this.ctx.sendRemoteCallEndedMessage('declined', this.callId);
+      this.ctx.onCallEnded('declined', this.callId);
     }
     this.destroy();
     this.call.close();

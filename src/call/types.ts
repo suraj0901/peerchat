@@ -1,4 +1,5 @@
 import type { PeerError } from 'peerjs';
+import type { CallState } from './state';
 
 export type CallEmittedEvent =
   | { type: 'call.incoming'; callId: string; remotePeerId: string }
@@ -7,3 +8,14 @@ export type CallEmittedEvent =
   | { type: 'call.error'; callId: string; error: Error | PeerError<string> }
   | { type: 'call.rejected'; callId: string; remotePeerId: string }
   | { type: 'call.declined'; callId: string; remotePeerId: string };
+
+/**
+ * Immutable snapshot of a call's essential information.
+ * Returned by `PeerManager.getActiveCalls()`.
+ */
+export interface CallInfo {
+  callId: string;
+  remotePeerId: string;
+  state: CallState['_tag'];
+  direction: 'inbound' | 'outbound';
+}

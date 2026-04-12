@@ -14,6 +14,7 @@ const log = createLogger("peer");
 export interface PeerContext extends MachineContext<PeerState> {
   emit: (event: PeerEmittedEvent) => void;
   notifyChange: () => void;
+  bumpVersion: () => void;
 }
 
 // ── Base ──────────────────────────────────────────────────────────────────────
@@ -178,6 +179,7 @@ export class PeerReadyState implements BasePeerState {
       remotePeerId,
     );
     this.connections.set(connection.connectionId, child);
+    this.ctx.bumpVersion();
     this.ctx.notifyChange();
   }
 
@@ -210,6 +212,7 @@ export class PeerReadyState implements BasePeerState {
     );
 
     this.calls.set(call.connectionId, coordinator);
+    this.ctx.bumpVersion();
     this.ctx.notifyChange();
   }
 
@@ -267,6 +270,7 @@ export class PeerReadyState implements BasePeerState {
       "inbound",
     );
     this.calls.set(call.connectionId, coordinator);
+    this.ctx.bumpVersion();
     this.ctx.notifyChange();
     this.ctx.emit({
       type: "call.incoming",
@@ -297,6 +301,7 @@ export class PeerReadyState implements BasePeerState {
       connection.peer,
     );
     this.connections.set(connection.connectionId, child);
+    this.ctx.bumpVersion();
     this.ctx.notifyChange();
   };
 
@@ -403,6 +408,7 @@ export class PeerReadyState implements BasePeerState {
     const child = this.connections.get(connectionId);
     if (child) child.destroy();
     this.connections.delete(connectionId);
+    this.ctx.bumpVersion();
     this.ctx.notifyChange();
     if (event) this.ctx.emit(event);
   }
@@ -412,6 +418,7 @@ export class PeerReadyState implements BasePeerState {
     const coordinator = this.calls.get(callId);
     if (coordinator) coordinator.destroy();
     this.calls.delete(callId);
+    this.ctx.bumpVersion();
     this.ctx.notifyChange();
     if (event) this.ctx.emit(event);
   }

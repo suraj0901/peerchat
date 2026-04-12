@@ -60,7 +60,7 @@ export class CallCoordinator {
       callId: config.callId,
       remotePeerId: config.remotePeerId,
       direction: config.direction,
-    }) as CallMachine;
+    });
 
     this.setupParallelConnection();
     this.setupTransitionHandler();

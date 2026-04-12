@@ -4,6 +4,8 @@ import { createLogger } from '../core/logger';
 import { CallRingingState, CallConnectingState, type CallContext, type CallState } from './state';
 import type { CallDirection } from './state';
 
+export type OnCallEndedCallback = (reason: 'rejected' | 'declined', callId: string) => void;
+
 export class CallMachine extends AbstractMachine<CallState> {
   protected readonly log = createLogger('CallMachine');
 
@@ -12,14 +14,15 @@ export class CallMachine extends AbstractMachine<CallState> {
     callId: string,
     remotePeerId: string,
     direction: CallDirection,
-    sendRemoteCallEndedMessage?: (reason: 'rejected' | 'declined', callId: string) => void,
+    onCallEnded: OnCallEndedCallback = () => {},
   ) {
     super();
 
     this.log.info(`🔧 CallMachine created — ${direction} call "${callId}" with "${remotePeerId}"`);
 
-    const ctx = this.createContext<CallContext>();
-    ctx.sendRemoteCallEndedMessage = sendRemoteCallEndedMessage ?? (() => {});
+    const ctx = this.createContext<CallContext>({
+      onCallEnded,
+    });
 
     if (direction === 'inbound') {
       this.currentState = new CallRingingState(call, callId, remotePeerId, ctx);

@@ -1,6 +1,7 @@
 import { createLogger, type Logger } from './logger';
 import type { MediaConnection } from 'peerjs';
 import type { CallDirection } from '../call/state';
+import type { CallMachine } from '../call/CallMachine';
 
 export interface MachineContext<S> {
   transition: (nextState: S) => void;
@@ -16,16 +17,43 @@ export interface CallMachineFactory {
     callId: string;
     remotePeerId: string;
     direction: CallDirection;
-  }): unknown;
+  }): CallMachine;
 }
 
 export abstract class AbstractMachine<S extends { destroy(): void }, E extends { type: string } = never> {
   protected currentState!: S;
   protected abstract readonly log: Logger;
-  
+
   private transitionListeners = new Set<(next: S, prev: S) => void>();
   private stateSubscribers = new Set<() => void>();
   private eventListeners = new Map<string, Set<(event: any) => void>>();
+  private snapshotVersion = 0;
+
+  /**
+   * Increment the snapshot version. Call this when internal mutable state changes
+   * (e.g., Maps, Sets) that should trigger a re-render in React's useSyncExternalStore.
+   */
+  protected bumpVersion(): void {
+    this.snapshotVersion++;
+    this.stateSubscribers.forEach(s => s());
+  }
+
+  /**
+   * Get the current snapshot version. Useful for comparing state equality.
+   */
+  public getVersion(): number {
+    return this.snapshotVersion;
+  }
+
+  /**
+   * Get an immutable snapshot suitable for React's useSyncExternalStore.
+   * Override this method in subclasses to return a plain-object snapshot.
+   * Default: returns `{ state, version }` where `state` is the current state
+   * and `version` ensures Object.is changes when internal state mutates.
+   */
+  public getSnapshot(): { state: S; version: number } {
+    return { state: this.currentState, version: this.snapshotVersion };
+  }
 
   protected createContext<C extends MachineContext<S>>(additionalCtx: Omit<C, 'transition'> = {} as Omit<C, 'transition'>): C {
     return {
