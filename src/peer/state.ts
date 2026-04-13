@@ -1,18 +1,14 @@
 import type { DataConnection, MediaConnection, Peer, PeerError } from "peerjs";
-import { ConnectionMachine } from "../connection/ConnectionMachine";
 import { isState, type MachineContext } from "../core";
 import { createLogger } from "../core/logger";
 import { isFatalError, type PeerEmittedEvent } from "./types";
-import type { CallState } from "../call";
-import { SignalingService, isSignalingMessage } from "../signaling";
-import { CallCoordinator, type CallCoordinatorConfig } from "../call/CallCoordinator";
 
 const log = createLogger("peer");
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
-import type { ConnectionManager } from '../connection/ConnectionManager';
 import type { CallManager } from '../call/CallManager';
+import type { ConnectionManager } from '../connection/ConnectionManager';
 
 export interface PeerContext extends MachineContext<PeerState> {
   emit: (event: PeerEmittedEvent) => void;
@@ -145,7 +141,7 @@ export class PeerReadyState implements BasePeerState {
     private ctx: PeerContext,
   ) {
     log.info(`✅ PeerReadyState created — peerId: ${peerId}`);
-    
+
     this.peer.on("connection", this.onConnection);
     this.peer.on("call", this.onIncomingCall);
     this.peer.on("disconnected", this.onDisconnected);
@@ -319,7 +315,7 @@ export class PeerErrorState implements BasePeerState {
   constructor(public readonly lastError: PeerError<string>) {
     log.error("💀 PeerErrorState created", lastError.type, lastError.message);
   }
-  public destroy() {}
+  public destroy() { }
   public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }
@@ -330,7 +326,7 @@ export class PeerDestroyedState implements BasePeerState {
   constructor() {
     log.info("💀 PeerDestroyedState created");
   }
-  public destroy() {}
+  public destroy() { }
   public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
     return isState(this, tag);
   }

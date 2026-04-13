@@ -15,7 +15,7 @@ export class CallManager {
     private readonly ctx: PeerContext,
     private readonly signalingService: SignalingService,
     private readonly connectionManager: ConnectionManager
-  ) {}
+  ) { }
 
   /** Get an existing call coordinator by ID */
   public getCall(callId: string): CallCoordinator | undefined {
@@ -43,25 +43,25 @@ export class CallManager {
 
     // Prevent duplicate
     for (const coordinator of this.calls.values()) {
-      const child = coordinator.callMachine.getState();
-      if ((child._tag === 'ringing' || child._tag === 'connecting' || child._tag === 'live') && child.remotePeerId === remotePeerId) {
-        log.warn(`  → duplicate call to "${remotePeerId}" — skipping (existing state: ${child._tag})`);
+      const childState = coordinator.callMachine.getState();
+      if ((childState.is('ringing') || childState.is('connecting') || childState.is('live')) && childState.remotePeerId === remotePeerId) {
+        log.warn(`  → duplicate call to "${remotePeerId}" — skipping (existing state: ${childState._tag})`);
         return;
       }
     }
 
     const mediaCall = peer.call(remotePeerId, localStream);
     log.debug(`  → PeerJS call created, callId: ${mediaCall.connectionId}`);
-    
+
     this.addCall(mediaCall, mediaCall.connectionId, remotePeerId, 'outbound');
   }
 
   /** Handle an incoming call from the network */
   public handleIncoming(mediaCall: MediaConnection): void {
     log.info(`📥 incoming call from "${mediaCall.peer}", callId: ${mediaCall.connectionId}`);
-    
+
     this.addCall(mediaCall, mediaCall.connectionId, mediaCall.peer, 'inbound');
-    
+
     this.ctx.emit({
       type: 'call.incoming',
       callId: mediaCall.connectionId,
