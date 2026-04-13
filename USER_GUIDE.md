@@ -971,12 +971,6 @@ if (state.is('initializing')) {
 ```ts
 if (state.is('ready')) {
   state.peerId;           // Unique peer ID
-  state.connections;      // Map of connection machines
-  state.calls;           // Map of call coordinators
-  
-  // Methods
-  state.connect('remote-peer-id');
-  state.call('remote-peer-id', localStream);
 }
 ```
 
@@ -985,8 +979,6 @@ if (state.is('ready')) {
 ```ts
 if (state.is('disconnected')) {
   state.peerId;
-  state.connections;
-  state.calls;
   state.maxRetries;
   state.baseRetryDelay;
   

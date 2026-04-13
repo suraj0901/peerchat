@@ -69,22 +69,28 @@ PeerChat is built on three core principles:
 │  │  - destroyed    │      │       │  - recovering    │             │
 │  └────────┬────────┘      │       │  - denied        │             │
 │           │               │       └──────────────────┘             │
-│           │ spawns        │                                       │
+│           │ delegates     │                                       │
 │           ▼               │                                       │
 │  ┌─────────────────┐      │                                       │
-│  │  CallCoordinator│◄─────┘ (manual wiring by consumer)           │
-│  │  ┌───────────┐  │                                              │
-│  │  │CallMachine│  │  ┌──────────────────────┐                   │
-│  │  │ States:   │  │  │ ConnectionMachine    │                   │
-│  │  │ - ringing │  │  │ States:              │                   │
-│  │  │ - connect │  │  │  - connecting        │                   │
-│  │  │ - live    │  │  │  - open              │                   │
-│  │  │ - held    │  │  │  - closed            │                   │
-│  │  │ - remote- │  │  │  - error             │                   │
-│  │  │   Held    │  │  └──────────────────────┘                   │
+│  │ CallManager     │◄─────┘ (manual wiring by consumer)           │
+│  │ ConnectionManager                                              │
+│  └────────┬────────┘                                              │
+│           │ spawns                                                │
+│           ▼                                                       │
+│  ┌─────────────────┐                                              │
+│  │  CallCoordinator│                                              │
+│  │  ┌───────────┐  │  ┌──────────────────────┐                   │
+│  │  │CallMachine│  │  │ ConnectionMachine    │                   │
+│  │  │ States:   │  │  │ States:              │                   │
+│  │  │ - ringing │  │  │  - connecting        │                   │
+│  │  │ - connect │  │  │  - open              │                   │
+│  │  │ - live    │  │  │  - closed            │                   │
+│  │  │ - held    │  │  │  - error             │                   │
+│  │  │ - remote- │  │  └──────────────────────┘                   │
+│  │  │   Held    │  │                                              │
 │  │  │ - ended   │  │                                              │
 │  │  │ - error   │  │                                              │
-│  │  └───────────┘  │  └──────────────────────┘                   │
+│  │  └───────────┘  │                                              │
 │  │                 │                                              │
 │  │ ┌────────────────────┐                                        │
 │  │ │ SignalingService   │ (internal, over data channel)          │
@@ -236,20 +242,20 @@ export const MediaEvents = {
 
 Events are emitted via `this.emit()` and consumed via `machine.on(eventType, handler)`.
 
-### Child Machines
+### Managers and Child Machines
 
-Machines spawn child machines to manage independent lifecycles:
+Machines spawn child machines to manage independent lifecycles. To maintain clean architecture, this is delegated to dedicated managers:
 
-- **PeerManager** spawns **ConnectionMachine** for each data connection
-- **PeerManager** spawns **CallCoordinator** (which contains **CallMachine**) for each call
+- **ConnectionManager** spawns and manages **ConnectionMachine** for each data connection
+- **CallManager** spawns and manages **CallCoordinator** (which contains **CallMachine**) for each call
 - **CallCoordinator** uses **SignalingService** for internal signaling messages
 
-Child machines are stored in `Map`s keyed by their ID:
+These managers are composed within the `PeerManager`:
 
 ```typescript
-// In PeerReadyState
-public readonly connections: Map<string, ConnectionMachine>;
-public readonly calls: Map<string, CallCoordinator>;
+// In PeerManager
+private connectionManager: ConnectionManager;
+private callManager: CallManager;
 ```
 
 ---
@@ -260,7 +266,7 @@ public readonly calls: Map<string, CallCoordinator>;
 
 **File:** `src/peer/PeerManager.ts`
 
-The top-level machine managing the PeerJS lifecycle, data connections, and calls.
+The top-level machine managing the PeerJS lifecycle. Child machines and data streams are delegated to `CallManager` and `ConnectionManager`.
 
 #### States
 
@@ -297,10 +303,10 @@ getConnectionMachine(connectionId: string): ConnectionMachine | null
 
 #### Multi-Call Orchestration
 
-`PeerReadyState` internally manages the multi-call lifecycle:
+`CallManager` internally handles the multi-call lifecycle and coordinates with the `PeerManager`:
 
 - **`holdAllLiveCalls()`** — Called by `answer()` and `resume()` to auto-hold the current live call
-- **`emitSelectionRequiredIfNeeded()`** — Called after `removeCall()`. Checks if held calls remain with no live call, and if so emits `call.selectionRequired` with the list of `heldCallIds`
+- **`emitSelectionRequiredIfNeeded()`** — Called after a call is removed. Checks if held calls remain with no live call, and if so emits `call.selectionRequired` with the list of `heldCallIds`
 - **`hasLiveCall()`** — Used by `call()` to block outbound calls when a live call exists
 
 #### Media Attachment
@@ -469,6 +475,7 @@ peerchat/
 │   │   ├── state.ts          # Call state classes
 │   │   └── types.ts          # CallEmittedEvent, CallInfo
 │   ├── connection/           # ConnectionMachine
+│   │   ├── ConnectionManager.ts
 │   │   ├── ConnectionMachine.ts
 │   │   ├── state.ts
 │   │   └── types.ts
@@ -479,12 +486,17 @@ peerchat/
 │   └── signaling/            # SignalingService (internal)
 │       ├── SignalingService.ts
 │       └── types.ts
+├── test/                     # Vitest test suite
+│   ├── peer/
+│   ├── call/
+│   ├── connection/
+│   ├── media/
+│   └── __mocks__/
 ├── example-react/            # Full working React demo
-├── test-call.ts              # Transition table definitions (not compiled)
 ├── package.json
 ├── tsconfig.json
 ├── tsup.config.ts
-└── ARCHITECTURE_REVIEW.md    # Comprehensive architecture review
+└── vitest.config.ts          # Vitest configuration
 ```
 
 ### Build System
@@ -533,12 +545,13 @@ The project uses strict TypeScript settings in `tsconfig.json`:
 
 ### Test Strategy
 
-PeerChat currently has **zero test coverage**. Adding tests is a top priority. The testing strategy should cover:
+PeerChat includes **comprehensive test coverage** utilizing [Vitest](https://vitest.dev/). It utilizes deterministic unit and integration setup verifying the core managers.
 
 #### Unit Tests
 
 | Area | What to Test |
 |------|-------------|
+| **Core Managers** | Operations of `PeerManager`, `CallManager`, `ConnectionManager`, etc. |
 | **State transitions** | Happy path and error paths for each machine |
 | **Event emission** | Events are emitted with correct payloads |
 | **Child machine lifecycle** | Spawn, cleanup, error handling |
@@ -556,10 +569,10 @@ PeerChat currently has **zero test coverage**. Adding tests is a top priority. T
 
 ### Writing Tests
 
-Tests should be placed in a `tests/` directory mirroring the `src/` structure:
+Tests are placed in the `test/` directory mirroring the `src/` structure:
 
 ```
-tests/
+test/
   core/
     machine.test.ts
     events.test.ts
@@ -575,8 +588,8 @@ tests/
     SignalingService.test.ts
   media/
     MediaMachine.test.ts
-  helpers/
-    mocks.ts
+  __mocks__/
+    peerjs.ts
 ```
 
 ### Mocking PeerJS
@@ -584,102 +597,78 @@ tests/
 Since PeerJS is a peer dependency, tests should mock it:
 
 ```typescript
-// tests/helpers/mocks.ts
+// test/__mocks__/peerjs.ts
+import { vi } from 'vitest';
 
-export function createMockPeer(options: Partial<Peer> = {}): Peer {
-  const peer = {
-    id: options.id ?? 'test-peer-id',
-    open: true,
-    destroyed: false,
-    connect: jest.fn(),
-    call: jest.fn(),
-    on: jest.fn(),
-    off: jest.fn(),
-    destroy: jest.fn(),
-    reconnect: jest.fn(),
-    ...options,
-  } as unknown as Peer;
+export class MockPeer {
+  id: string;
+  open = false;
+  destroyed = false;
+  connect = vi.fn();
+  call = vi.fn();
+  on = vi.fn();
+  off = vi.fn();
+  destroy = vi.fn();
+  reconnect = vi.fn();
 
-  return peer;
+  constructor(id?: string) {
+    this.id = id ?? 'test-peer-id';
+  }
+
+  _simulateOpen() {
+    this.open = true;
+    const onOpen = this.on.mock.calls.find(c => c[0] === 'open');
+    if (onOpen) onOpen[1](this.id);
+  }
+
+  disconnect() {
+    this.open = false;
+    const onDisc = this.on.mock.calls.find(c => c[0] === 'disconnected');
+    if (onDisc) onDisc[1]();
+  }
 }
 
-export function createMockDataConnection(options: Partial<DataConnection> = {}): DataConnection {
-  const conn = {
-    connectionId: 'test-connection-id',
-    peer: 'remote-peer-id',
-    open: false,
-    send: jest.fn(),
-    close: jest.fn(),
-    on: jest.fn(),
-    off: jest.fn(),
-    ...options,
-  } as unknown as DataConnection;
-
-  return conn;
-}
-
-export function createMockMediaConnection(options: Partial<MediaConnection> = {}): MediaConnection {
-  const call = {
-    connectionId: 'test-call-id',
-    peer: 'remote-peer-id',
-    answerStream: jest.fn(),
-    close: jest.fn(),
-    on: jest.fn(),
-    off: jest.fn(),
-    ...options,
-  } as unknown as MediaConnection;
-
-  return call;
-}
-
-export function createMockMediaStream(): MediaStream {
-  return {
-    getTracks: () => [],
-    addTrack: jest.fn(),
-    removeTrack: jest.fn(),
-    clone: jest.fn(),
-  } as unknown as MediaStream;
-}
+// ... Additional mocks for DataConnection, MediaConnection
 ```
 
 ### Example: Testing Peer State Transitions
 
 ```typescript
-// tests/peer/state-transitions.test.ts
+// test/peer/PeerManager.test.ts
 
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PeerManager } from '../../src/peer/PeerManager';
-import { createMockPeer } from '../helpers/mocks';
+import { MockPeer } from '../__mocks__/peerjs';
 
-describe('PeerManager state transitions', () => {
-  it('should transition from initializing to ready on open', () => {
-    const mockPeer = createMockPeer({ id: 'test-id', open: false });
-    const pm = new PeerManager({ peer: mockPeer });
+describe('PeerManager State Machine', () => {
+  let mockPeer: MockPeer;
 
-    // Initial state should be initializing
-    expect(pm.getState()._tag).toBe('initializing');
-
-    // Simulate PeerJS 'open' event
-    const openHandler = (mockPeer.on as jest.Mock).mock.calls
-      .find(([event]) => event === 'open')?.[1];
-
-    openHandler('test-id');
-
-    // Should transition to ready
-    expect(pm.getState()._tag).toBe('ready');
-    expect(pm.getState().peerId).toBe('test-id');
+  beforeEach(() => {
+    mockPeer = new MockPeer('test-peer-123');
   });
 
-  it('should transition to error on fatal error', () => {
-    const mockPeer = createMockPeer();
-    const pm = new PeerManager({ peer: mockPeer });
+  it('initializes in initializing state', () => {
+    const manager = new PeerManager({ peer: mockPeer as any });
+    expect(manager.getState()._tag).toBe('initializing');
+  });
 
-    // Simulate fatal error
-    const errorHandler = (mockPeer.on as jest.Mock).mock.calls
-      .find(([event]) => event === 'error')?.[1];
+  it('transitions to ready when underlying peer opens', () => {
+    const manager = new PeerManager({ peer: mockPeer as any });
+    
+    // Simulate peer open event
+    mockPeer._simulateOpen();
+    
+    expect(manager.getState()._tag).toBe('ready');
+  });
 
-    errorHandler({ type: 'unavailable-id', message: 'Peer ID unavailable' });
+  it('transitions to disconnected when underlying peer disconnects', () => {
+    const manager = new PeerManager({ peer: mockPeer as any, maxRetries: 0 }); // disable auto-reconnect
+    
+    mockPeer._simulateOpen();
+    expect(manager.getState()._tag).toBe('ready');
 
-    expect(pm.getState()._tag).toBe('error');
+    mockPeer.disconnect();
+    expect(manager.getState()._tag).toBe('disconnected');
   });
 });
 ```

@@ -89,13 +89,14 @@ PeerChat is built around composable state machines. Every machine extends `Abstr
 - **Simple API** — `createPeer()`, `createMedia()`, convenience methods like `peer.call()`, `peer.send()`
 - **Advanced API** — Direct machine access, state narrowing, child machines
 
-**Commands live on the state, not the machine.** Narrow the state via `_tag`, then call methods directly:
+**Commands typically live on the state.** Narrow the state via `_tag` (for machines like `MediaMachine`, `CallMachine`), then call methods directly:
 
 ```ts
-const state = peer.getState();
-if (state._tag === 'ready') {
-  state.connect('remote-peer-id');
-  state.call('remote-peer-id', localStream);
+const mediaState = media.getState();
+if (mediaState._tag === 'active') {
+  mediaState.toggleAudio();
+  mediaState.toggleVideo();
+  mediaState.stop();
 }
 ```
 
@@ -219,16 +220,13 @@ const snapshot = useSyncExternalStore(
   () => peer.getSnapshot(),
 );
 
-// Access child machines with proper types
-const state = peer.getState();
-if (state._tag === 'ready') {
-  for (const [id, coordinator] of state.calls) {
-    const callMachine: CallMachine = coordinator.callMachine;
-    const callState = callMachine.getState();
-    if (callState._tag === 'live') {
-      callState.remoteStream; // MediaStream
-      callState.hangUp();     // typed command
-    }
+// Access child machines directly
+const callMachine: CallMachine | null = peer.getCallMachine('some-call-id');
+if (callMachine) {
+  const callState = callMachine.getState();
+  if (callState._tag === 'live') {
+    callState.remoteStream; // MediaStream
+    callState.hangUp();     // typed command
   }
 }
 ```
@@ -252,8 +250,8 @@ const peer = new PeerManager({
 | State | `_tag` | Key Properties | Commands |
 |---|---|---|---|
 | `PeerInitializingState` | `initializing` | `peer` | — |
-| `PeerReadyState` | `ready` | `peer`, `peerId`, `connections`, `calls` | `connect(remotePeerId)`, `call(remotePeerId, stream)` |
-| `PeerDisconnectedState` | `disconnected` | `peer`, `peerId`, `connections`, `calls` | `reconnect()` |
+| `PeerReadyState` | `ready` | `peer`, `peerId` | `connect(remotePeerId)`, `call(remotePeerId, stream)` |
+| `PeerDisconnectedState` | `disconnected` | `peer`, `peerId` | `reconnect()` |
 | `PeerErrorState` | `error` | `lastError` | — |
 | `PeerDestroyedState` | `destroyed` | — | — |
 
@@ -319,7 +317,7 @@ const media = new MediaMachine();
 
 ### Child Machines
 
-`PeerReadyState` spawns child machines automatically. Access them via query methods or directly:
+`PeerManager` spawns child machines automatically. Access them via query methods or directly:
 
 #### `CallMachine` states
 
