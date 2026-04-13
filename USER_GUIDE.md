@@ -876,6 +876,25 @@ media.on(MediaEvents.VIDEO_TOGGLED, ({ muted }) => {
 
 ## Advanced API Reference
 
+### Focused Interfaces (ISP)
+
+The `PeerManager` encompasses the entire state machine, but you often only need a subset of its capabilities for a specific component. PeerChat exports narrowly typed interfaces to support the **Interface Segregation Principle (ISP)** and make mocking components easier:
+
+- `PeerCallApi`: For components that manage the call lifecycle (`call`, `answer`, `hold`, `resume`)
+- `PeerConnectionApi`: For P2P data channels (`connect`, `send`)
+- `PeerMediaApi`: For attaching/detaching media (`attachMedia`, `detachMedia`)
+- `PeerQueryApi`: For read-only observation (`getActiveCalls`, `getHeldCalls`, `needsCallSelection`)
+
+You can use these as types in your functions or React props:
+
+```ts
+import type { PeerCallApi } from 'peerchat';
+
+function CallControls({ api }: { api: PeerCallApi }) {
+  return <button onClick={() => api.hold(callId)}>Hold</button>;
+}
+```
+
 ### State Machine Architecture
 
 PeerChat uses a composable state machine architecture where every resource is a machine with typed, discriminated-union states. Each state has a `_tag` property that identifies its type:
