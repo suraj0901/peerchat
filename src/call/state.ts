@@ -1,6 +1,6 @@
 import type { MediaConnection, PeerError } from 'peerjs';
 
-import { isState, type MachineContext } from '../core';
+import { AbstractState, type MachineContext } from '../core';
 import { createLogger } from '../core/logger';
 
 const log = createLogger('call');
@@ -94,23 +94,75 @@ class TrackController {
   }
 }
 
-// ── CallRingingState ─────────────────────────────────────────────────────────
+// ── BasePreLiveCallState ─────────────────────────────────────────────────────
 
-export class CallRingingState implements BaseCallState {
-  public readonly _tag = 'ringing';
-  public readonly direction = 'inbound';
-  private timer: ReturnType<typeof setTimeout>;
+/**
+ * Shared base for states that precede a live connection (Ringing, Connecting).
+ * Handles: timer, onClose, onError, onTimeout, handleFatalError, destroy.
+ */
+abstract class BasePreLiveCallState extends AbstractState<CallState> implements BaseCallState {
+  public abstract override readonly _tag: CallStateTag;
+  protected timer: ReturnType<typeof setTimeout>;
 
   constructor(
     public readonly call: MediaConnection,
     public readonly callId: string,
     public readonly remotePeerId: string,
-    private ctx: CallContext
+    protected ctx: CallContext,
+    timeoutMs: number,
   ) {
-    log.info(`🔔 CallRingingState[${callId}] — inbound call from "${remotePeerId}"`);
-    this.timer = setTimeout(this.onTimeout, RINGING_TIMEOUT_MS);
+    super();
+    this.timer = setTimeout(this.onTimeout, timeoutMs);
     this.call.on('close', this.onClose);
     this.call.on('error', this.onError);
+  }
+
+  protected onClose = () => {
+    log.warn(`⚠️ call[${this.callId}] "close" while ${this._tag}`);
+    this.destroy();
+    const next = new CallEndedState(this.callId, this.remotePeerId);
+    this.ctx.transition(next);
+  };
+
+  protected onError = (error: Error | PeerError<string>) => {
+    log.error(`❌ call[${this.callId}] "error" while ${this._tag}`, error);
+    this.handleFatalError(error);
+  };
+
+  private onTimeout = () => {
+    log.error(`⏱ call[${this.callId}] ${this._tag} timed out`);
+    this.handleFatalError(new Error(`Call ${this._tag} timed out`));
+  };
+
+  protected handleFatalError(error: Error | PeerError<string>) {
+    this.destroy();
+    this.call.close();
+    const next = new CallErrorState(this.callId, this.remotePeerId, error);
+    this.ctx.transition(next);
+  }
+
+  public destroy() {
+    log.debug(`  ${this.constructor.name}[${this.callId}].destroy()`);
+    clearTimeout(this.timer);
+    this.call.off('close', this.onClose);
+    this.call.off('error', this.onError);
+  }
+}
+
+// ── CallRingingState ─────────────────────────────────────────────────────────
+
+export class CallRingingState extends BasePreLiveCallState {
+  public readonly _tag = 'ringing';
+  public readonly direction = 'inbound';
+
+  constructor(
+    call: MediaConnection,
+    callId: string,
+    remotePeerId: string,
+    ctx: CallContext,
+  ) {
+    super(call, callId, remotePeerId, ctx, RINGING_TIMEOUT_MS);
+    log.info(`🔔 CallRingingState[${callId}] — inbound call from "${remotePeerId}"`);
   }
 
   public answer(localStream: MediaStream): void {
@@ -129,61 +181,23 @@ export class CallRingingState implements BaseCallState {
     const next = new CallEndedState(this.callId, this.remotePeerId);
     this.ctx.transition(next);
   }
-
-  private onClose = () => {
-    log.warn(`⚠️ call[${this.callId}] "close" while ringing — caller hung up`);
-    this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-  };
-
-  private onError = (error: Error | PeerError<string>) => {
-    log.error(`❌ call[${this.callId}] "error" while ringing`, error);
-    this.handleFatalError(error);
-  };
-
-  private onTimeout = () => {
-    log.error(`⏱ call[${this.callId}] ringing timed out after ${RINGING_TIMEOUT_MS}ms`);
-    this.handleFatalError(new Error('Call ringing timed out'));
-  };
-
-  private handleFatalError(error: Error | PeerError<string>) {
-    this.destroy();
-    this.call.close();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error);
-    this.ctx.transition(next);
-  }
-
-  public destroy() {
-    log.debug(`  CallRingingState[${this.callId}].destroy()`);
-    clearTimeout(this.timer);
-    this.call.off('close', this.onClose);
-    this.call.off('error', this.onError);
-  }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── CallConnectingState ──────────────────────────────────────────────────────
 
-export class CallConnectingState implements BaseCallState {
+export class CallConnectingState extends BasePreLiveCallState {
   public readonly _tag = 'connecting';
-  private timer: ReturnType<typeof setTimeout>;
 
   constructor(
-    public readonly call: MediaConnection,
-    public readonly callId: string,
-    public readonly remotePeerId: string,
+    call: MediaConnection,
+    callId: string,
+    remotePeerId: string,
     public readonly direction: CallDirection,
-    private ctx: CallContext
+    ctx: CallContext,
   ) {
+    super(call, callId, remotePeerId, ctx, CONNECTING_TIMEOUT_MS);
     log.info(`🔗 CallConnectingState[${callId}] — ${direction} call to "${remotePeerId}", waiting for "stream" event`);
-    this.timer = setTimeout(this.onTimeout, CONNECTING_TIMEOUT_MS);
     this.call.on('stream', this.onStream);
-    this.call.on('close', this.onClose);
-    this.call.on('error', this.onError);
   }
 
   public hangUp() {
@@ -204,47 +218,16 @@ export class CallConnectingState implements BaseCallState {
     this.ctx.transition(next);
   };
 
-  private onClose = () => {
-    log.warn(`⚠️ call[${this.callId}] "close" while connecting`);
-    this.destroy();
-    const next = new CallEndedState(this.callId, this.remotePeerId);
-    this.ctx.transition(next);
-  };
-
-  private onError = (error: Error | PeerError<string>) => {
-    log.error(`❌ call[${this.callId}] "error" while connecting`, error);
-    this.handleFatalError(error);
-  };
-
-  private onTimeout = () => {
-    log.error(`⏱ call[${this.callId}] connecting timed out after ${CONNECTING_TIMEOUT_MS}ms`);
-    this.handleFatalError(new Error('Call connecting timed out'));
-  };
-
-  private handleFatalError(error: Error | PeerError<string>) {
-    this.destroy();
-    this.call.close();
-    const next = new CallErrorState(this.callId, this.remotePeerId, error);
-    this.ctx.transition(next);
-  }
-
-  public destroy() {
-    log.debug(`  CallConnectingState[${this.callId}].destroy()`);
-    clearTimeout(this.timer);
+  public override destroy() {
+    super.destroy();
     this.call.off('stream', this.onStream);
-    this.call.off('close', this.onClose);
-    this.call.off('error', this.onError);
-  }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this, tag);
   }
 }
 
 // ── Abstract Base States ─────────────────────────────────────────────────────
 
-export abstract class BaseActiveCallState implements BaseCallState {
-  public abstract readonly _tag: CallStateTag;
+export abstract class BaseActiveCallState extends AbstractState<CallState> implements BaseCallState {
+  public abstract override readonly _tag: CallStateTag;
 
   constructor(
     public readonly call: MediaConnection,
@@ -254,6 +237,7 @@ export abstract class BaseActiveCallState implements BaseCallState {
     public readonly remoteStream: MediaStream,
     protected ctx: CallContext
   ) {
+    super();
     this.call.on('close', this.onClose);
     this.call.on('error', this.onError);
   }
@@ -286,25 +270,19 @@ export abstract class BaseActiveCallState implements BaseCallState {
     this.call.off('close', this.onClose);
     this.call.off('error', this.onError);
   }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this as unknown as CallState, tag);
-  }
 }
 
-export abstract class BaseTerminalCallState implements BaseCallState {
-  public abstract readonly _tag: CallStateTag;
-
+export abstract class BaseTerminalCallState extends AbstractState<CallState> implements BaseCallState {
+  public abstract override readonly _tag: CallStateTag;
+  
   constructor(
     public readonly callId: string,
     public readonly remotePeerId: string,
-  ) { }
+  ) {
+    super();
+  }
 
   public destroy() { }
-
-  public is<T extends CallStateTag>(tag: T): this is Extract<CallState, { _tag: T }> {
-    return isState(this as unknown as CallState, tag);
-  }
 }
 
 // ── CallLiveState ────────────────────────────────────────────────────────────

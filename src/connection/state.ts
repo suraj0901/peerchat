@@ -1,5 +1,5 @@
 import type { DataConnection, PeerError } from 'peerjs';
-import { isState, type MachineContext } from '../core';
+import { AbstractState, type MachineContext } from '../core';
 import { createLogger } from '../core/logger';
 
 const log = createLogger('connection');
@@ -20,7 +20,7 @@ export interface BaseConnectionState {
 
 const CONNECTION_TIMEOUT_MS = 15_000;
 
-export class ConnectionConnectingState implements BaseConnectionState {
+export class ConnectionConnectingState extends AbstractState<ConnectionState> implements BaseConnectionState {
   public readonly _tag = 'connecting';
   private timer: ReturnType<typeof setTimeout>;
 
@@ -30,6 +30,7 @@ export class ConnectionConnectingState implements BaseConnectionState {
     public readonly remotePeerId: string,
     private ctx: ConnectionContext
   ) {
+    super();
     log.info(`🔗 ConnectionConnectingState[${connectionId}] → "${remotePeerId}" — waiting for "open" event`);
     log.debug(`  connection.open =`, connection.open, '| connection.type =', connection.type);
     this.timer = setTimeout(this.onTimeout, CONNECTION_TIMEOUT_MS);
@@ -76,13 +77,9 @@ export class ConnectionConnectingState implements BaseConnectionState {
     this.connection.off('close', this.onClose);
     this.connection.off('error', this.onError);
   }
-
-  public is<T extends ConnectionStateTag>(tag: T): this is Extract<ConnectionState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
-export class ConnectionOpenState implements BaseConnectionState {
+export class ConnectionOpenState extends AbstractState<ConnectionState> implements BaseConnectionState {
   public readonly _tag = 'open';
 
   constructor(
@@ -91,6 +88,7 @@ export class ConnectionOpenState implements BaseConnectionState {
     public readonly remotePeerId: string,
     private ctx: ConnectionContext
   ) {
+    super();
     log.info(`✅ ConnectionOpenState[${connectionId}] — data channel open with "${remotePeerId}"`);
     this.connection.on('data', this.onData);
     this.connection.on('close', this.onClose);
@@ -136,25 +134,19 @@ export class ConnectionOpenState implements BaseConnectionState {
     this.connection.off('close', this.onClose);
     this.connection.off('error', this.onError);
   }
-
-  public is<T extends ConnectionStateTag>(tag: T): this is Extract<ConnectionState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
-export abstract class BaseTerminalConnectionState implements BaseConnectionState {
-  public abstract readonly _tag: ConnectionStateTag;
+export abstract class BaseTerminalConnectionState extends AbstractState<ConnectionState> implements BaseConnectionState {
+  public abstract override readonly _tag: ConnectionStateTag;
 
   constructor(
     public readonly connectionId: string,
     public readonly remotePeerId: string,
-  ) {}
+  ) {
+    super();
+  }
 
   public destroy() {}
-
-  public is<T extends ConnectionStateTag>(tag: T): this is Extract<ConnectionState, { _tag: T }> {
-    return isState(this as unknown as ConnectionState, tag);
-  }
 }
 
 export class ConnectionClosedState extends BaseTerminalConnectionState {

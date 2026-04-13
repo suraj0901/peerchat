@@ -1,5 +1,5 @@
 import type { DataConnection, MediaConnection, Peer, PeerError } from "peerjs";
-import { isState, type MachineContext } from "../core";
+import { AbstractState, type MachineContext } from "../core";
 import { createLogger } from "../core/logger";
 import { isFatalError, type PeerEmittedEvent } from "./types";
 
@@ -35,7 +35,7 @@ export interface BasePeerState {
 
 // ── PeerInitializingState ────────────────────────────────────────────────────
 
-export class PeerInitializingState implements BasePeerState {
+export class PeerInitializingState extends AbstractState<PeerState> implements BasePeerState {
   public readonly _tag = "initializing";
 
   constructor(
@@ -44,6 +44,7 @@ export class PeerInitializingState implements BasePeerState {
     public readonly baseRetryDelay: number,
     private ctx: PeerContext,
   ) {
+    super();
     log.info(
       '🚀 PeerInitializingState created — waiting for PeerJS "open" event',
     );
@@ -122,15 +123,11 @@ export class PeerInitializingState implements BasePeerState {
     this.peer.off("close", this.onClose);
     this.peer.off("disconnected", this.onDisconnected);
   }
-
-  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── PeerReadyState ───────────────────────────────────────────────────────────
 
-export class PeerReadyState implements BasePeerState {
+export class PeerReadyState extends AbstractState<PeerState> implements BasePeerState {
   public readonly _tag = "ready";
 
   constructor(
@@ -140,6 +137,7 @@ export class PeerReadyState implements BasePeerState {
     public readonly baseRetryDelay: number,
     private ctx: PeerContext,
   ) {
+    super();
     log.info(`✅ PeerReadyState created — peerId: ${peerId}`);
 
     this.peer.on("connection", this.onConnection);
@@ -205,15 +203,11 @@ export class PeerReadyState implements BasePeerState {
     this.peer.off("error", this.onError);
     this.peer.off("close", this.onClose);
   }
-
-  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── PeerDisconnectedState ────────────────────────────────────────────────────
 
-export class PeerDisconnectedState implements BasePeerState {
+export class PeerDisconnectedState extends AbstractState<PeerState> implements BasePeerState {
   public readonly _tag = "disconnected";
   private retryCount: number;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -226,6 +220,7 @@ export class PeerDisconnectedState implements BasePeerState {
     public readonly baseRetryDelay: number,
     private ctx: PeerContext,
   ) {
+    super();
     this.retryCount = initialRetryCount;
     log.warn(
       `⚠️ PeerDisconnectedState created — retryCount: ${this.retryCount}/${this.maxRetries}`,
@@ -302,34 +297,26 @@ export class PeerDisconnectedState implements BasePeerState {
     this.peer.off("error", this.onError);
     this.peer.off("close", this.onClose);
   }
-
-  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── Terminal States ──────────────────────────────────────────────────────────
 
-export class PeerErrorState implements BasePeerState {
+export class PeerErrorState extends AbstractState<PeerState> implements BasePeerState {
   public readonly _tag = "error";
   constructor(public readonly lastError: PeerError<string>) {
+    super();
     log.error("💀 PeerErrorState created", lastError.type, lastError.message);
   }
   public destroy() { }
-  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
-export class PeerDestroyedState implements BasePeerState {
+export class PeerDestroyedState extends AbstractState<PeerState> implements BasePeerState {
   public readonly _tag = "destroyed";
   constructor() {
+    super();
     log.info("💀 PeerDestroyedState created");
   }
   public destroy() { }
-  public is<T extends PeerStateTag>(tag: T): this is Extract<PeerState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── Union ────────────────────────────────────────────────────────────────────

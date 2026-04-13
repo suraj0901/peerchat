@@ -15,6 +15,23 @@ export function isState<S extends { _tag: string }, T extends string>(
   return state._tag === tag;
 }
 
+/**
+ * Base class for all state objects. Provides the `is<T>()` type guard
+ * so individual state classes don't need to repeat it.
+ *
+ * @typeParam TUnion - The discriminated union type of all states in this machine.
+ */
+export abstract class AbstractState<TUnion extends { _tag: string }> {
+  abstract readonly _tag: string;
+
+  /** Type-safe state check. Narrows `this` to the matching union variant. */
+  is<T extends TUnion['_tag']>(tag: T): this is Extract<TUnion, { _tag: T }> {
+    return (this._tag as string) === tag;
+  }
+
+  abstract destroy(): void;
+}
+
 export abstract class AbstractMachine<S extends { destroy(): void }, E extends { type: string } = never> {
   protected currentState!: S;
   protected abstract readonly log: Logger;

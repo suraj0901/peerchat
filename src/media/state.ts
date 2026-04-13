@@ -1,4 +1,4 @@
-import { isState, type MachineContext } from '../core';
+import { AbstractState, type MachineContext } from '../core';
 import { createLogger } from '../core/logger';
 import type { MediaEmittedEvent } from './types';
 
@@ -45,13 +45,14 @@ const isPermissionDenied = (error: unknown): boolean =>
 
 // ── MediaIdleState ───────────────────────────────────────────────────────────
 
-export class MediaIdleState implements BaseMediaState {
+export class MediaIdleState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'idle';
 
   constructor(
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    super();
     log.info('💤 MediaIdleState created', permissions);
   }
 
@@ -79,15 +80,11 @@ export class MediaIdleState implements BaseMediaState {
   public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
 
   public destroy() { }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── MediaCheckingPermissionsState ────────────────────────────────────────────
 
-export class MediaCheckingPermissionsState implements BaseMediaState {
+export class MediaCheckingPermissionsState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'checkingPermissions';
   private aborted = false;
 
@@ -95,6 +92,7 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    super();
     log.info('🔑 MediaCheckingPermissionsState — querying Permissions API');
     this.check();
   }
@@ -139,15 +137,11 @@ export class MediaCheckingPermissionsState implements BaseMediaState {
   public destroy() {
     this.aborted = true;
   }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── MediaRequestingState ─────────────────────────────────────────────────────
 
-export class MediaRequestingState implements BaseMediaState {
+export class MediaRequestingState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'requesting';
   private controller = new AbortController();
 
@@ -158,6 +152,7 @@ export class MediaRequestingState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    super();
     log.info(`📡 MediaRequestingState — mode: ${mode}`);
     this.acquire();
   }
@@ -219,15 +214,11 @@ export class MediaRequestingState implements BaseMediaState {
   public destroy() {
     this.controller.abort();
   }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── MediaActiveState ─────────────────────────────────────────────────────────
 
-export class MediaActiveState implements BaseMediaState {
+export class MediaActiveState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'active';
   public audioMuted: boolean;
   public videoMuted: boolean;
@@ -245,6 +236,7 @@ export class MediaActiveState implements BaseMediaState {
     audioMuted = false,
     videoMuted = false,
   ) {
+    super();
     this._devices = devices;
     this.audioMuted = audioMuted;
     this.videoMuted = videoMuted;
@@ -346,15 +338,11 @@ export class MediaActiveState implements BaseMediaState {
       this.deviceChangeHandler = null;
     }
   }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── MediaSwitchingState ──────────────────────────────────────────────────────
 
-export class MediaSwitchingState implements BaseMediaState {
+export class MediaSwitchingState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'switching';
   private controller = new AbortController();
 
@@ -370,6 +358,7 @@ export class MediaSwitchingState implements BaseMediaState {
     private readonly audioMuted: boolean = false,
     private readonly videoMuted: boolean = false,
   ) {
+    super();
     log.info(`🔀 MediaSwitchingState — switching ${kind} to device "${deviceId}"`);
     this.performSwitch();
   }
@@ -428,15 +417,11 @@ export class MediaSwitchingState implements BaseMediaState {
   public destroy() {
     this.controller.abort();
   }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── MediaRecoveringState ─────────────────────────────────────────────────────
 
-export class MediaRecoveringState implements BaseMediaState {
+export class MediaRecoveringState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'recovering';
   private controller = new AbortController();
 
@@ -447,6 +432,7 @@ export class MediaRecoveringState implements BaseMediaState {
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    super();
     log.info('🔄 MediaRecoveringState — attempting to re-acquire media');
     this.acquire();
   }
@@ -506,21 +492,18 @@ export class MediaRecoveringState implements BaseMediaState {
   public destroy() {
     this.controller.abort();
   }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── MediaDeniedState ─────────────────────────────────────────────────────────
 
-export class MediaDeniedState implements BaseMediaState {
+export class MediaDeniedState extends AbstractState<MediaState> implements BaseMediaState {
   public readonly _tag = 'denied';
 
   constructor(
     public permissions: MediaPermissions,
     private ctx: MediaContext,
   ) {
+    super();
     log.warn('⛔ MediaDeniedState — user denied media permissions');
   }
 
@@ -534,10 +517,6 @@ export class MediaDeniedState implements BaseMediaState {
   public updatePermissions(permissions: MediaPermissions) { this.permissions = permissions; }
 
   public destroy() { }
-
-  public is<T extends MediaStateTag>(tag: T): this is Extract<MediaState, { _tag: T }> {
-    return isState(this, tag);
-  }
 }
 
 // ── Union ────────────────────────────────────────────────────────────────────
