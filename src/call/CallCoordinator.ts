@@ -143,23 +143,22 @@ export class CallCoordinator {
   private setupParallelConnection() {
     const existingConnection = this.config.getConnection(this._remotePeerId);
 
-    const handleSignalingMessage = (message: { type: string; callId: string }, connectionId: string) => {
-      if (message.type === 'remote_close') {
+    // ── Signaling Handler Map (OCP-compliant) ───────────────────────────────
+    // New message types = new map entries, no modification to dispatch logic.
+    const signalingHandlers: Record<string, () => void> = {
+      remote_close: () => {
         log.info(`  CallCoordinator[${this._callId}] received remote_close — closing call`);
         this.config.onEnded(this._callId, { type: 'call.ended' });
-        return;
-      }
-      if (message.type === 'call_rejected') {
+      },
+      call_rejected: () => {
         log.info(`  CallCoordinator[${this._callId}] received call_rejected`);
         this.config.onEnded(this._callId, { type: 'call.rejected' });
-        return;
-      }
-      if (message.type === 'call_declined') {
+      },
+      call_declined: () => {
         log.info(`  CallCoordinator[${this._callId}] received call_declined`);
         this.config.onEnded(this._callId, { type: 'call.declined' });
-        return;
-      }
-      if (message.type === 'call_held') {
+      },
+      call_held: () => {
         log.info(`  CallCoordinator[${this._callId}] received call_held — remote put us on hold`);
         const callState = this.callMachine.getState();
         if (callState._tag === 'live') {
@@ -167,9 +166,8 @@ export class CallCoordinator {
         } else {
           log.warn(`  → ignoring call_held — call state is "${callState._tag}", not "live"`);
         }
-        return;
-      }
-      if (message.type === 'call_resumed') {
+      },
+      call_resumed: () => {
         log.info(`  CallCoordinator[${this._callId}] received call_resumed — remote resumed`);
         const callState = this.callMachine.getState();
         if (callState._tag === 'remoteHeld') {
@@ -177,7 +175,15 @@ export class CallCoordinator {
         } else {
           log.warn(`  → ignoring call_resumed — call state is "${callState._tag}", not "remoteHeld"`);
         }
-        return;
+      },
+    };
+
+    const handleSignalingMessage = (message: { type: string; callId: string }, connectionId: string) => {
+      const handler = signalingHandlers[message.type];
+      if (handler) {
+        handler();
+      } else {
+        log.warn(`  CallCoordinator[${this._callId}] unknown signaling message type: "${message.type}"`);
       }
     };
 

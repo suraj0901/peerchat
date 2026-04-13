@@ -86,14 +86,15 @@ export class CallManager {
       direction,
       signalingService: this.signalingService,
       onEnded: (endedCallId, event) => {
-        if (event.type === 'call.ended') {
-          this.removeCall(endedCallId, { type: 'call.ended', callId: endedCallId });
-        } else if (event.type === 'call.error') {
-          this.removeCall(endedCallId, { type: 'call.error', callId: endedCallId, error: event.error });
-        } else if (event.type === 'call.rejected') {
-          this.removeCall(endedCallId, { type: 'call.rejected', callId: endedCallId, remotePeerId });
-        } else if (event.type === 'call.declined') {
-          this.removeCall(endedCallId, { type: 'call.declined', callId: endedCallId, remotePeerId });
+        const eventBuilders: Record<string, () => any> = {
+          'call.ended':    () => ({ type: 'call.ended', callId: endedCallId }),
+          'call.error':    () => ({ type: 'call.error', callId: endedCallId, error: (event as any).error }),
+          'call.rejected': () => ({ type: 'call.rejected', callId: endedCallId, remotePeerId }),
+          'call.declined': () => ({ type: 'call.declined', callId: endedCallId, remotePeerId }),
+        };
+        const builder = eventBuilders[event.type];
+        if (builder) {
+          this.removeCall(endedCallId, builder());
         }
       },
       onActive: (activeCallId, remoteStream) => {
