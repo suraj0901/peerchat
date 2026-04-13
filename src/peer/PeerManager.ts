@@ -1,17 +1,14 @@
 import type { Peer } from 'peerjs';
-import { AbstractMachine } from '../core';
 import { createLogger } from '../core/logger';
-import { PeerInitializingState, PeerReadyState, type PeerContext, type PeerState } from './state';
-import type { PeerEmittedEvent } from './types';
+import { PeerReadyState, type PeerState } from './state';
+import type { PeerEmittedEvent, PeerCallApi, PeerConnectionApi, PeerMediaApi, PeerQueryApi } from './types';
 import type { CallInfo } from '../call/types';
 import type { CallState } from '../call/state';
 import type { ConnectionInfo } from '../connection/types';
 import type { CallCoordinator } from '../call/CallCoordinator';
 import type { ConnectionMachine } from '../connection/ConnectionMachine';
 import type { MediaMachine } from '../media/MediaManager';
-import { ConnectionManager } from '../connection/ConnectionManager';
-import { CallManager } from '../call/CallManager';
-import { SignalingService } from '../signaling';
+import { PeerMachine } from './PeerMachine';
 
 // ── Call/Media options ────────────────────────────────────────────────────────
 
@@ -25,48 +22,70 @@ export interface AnswerOptions {
   stream?: MediaStream;
 }
 
-// ── PeerManager ──────────────────────────────────────────────────────────────
+// ── PeerManager (Facade) ─────────────────────────────────────────────────────
 
-export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
-  protected readonly log = createLogger('PeerManager');
+/**
+ * The primary entry point for the peerchat library.
+ *
+ * Acts as a **facade** that delegates to:
+ * - `PeerMachine` — peer lifecycle state machine
+ * - `CallManager` — call lifecycle and coordination
+ * - `ConnectionManager` — data channel management
+ *
+ * Consumers interact with `PeerManager` as if it were a single object. Internally,
+ * the responsibilities are cleanly separated for maintainability.
+ */
+export class PeerManager implements PeerCallApi, PeerConnectionApi, PeerMediaApi, PeerQueryApi {
+  private readonly log = createLogger('PeerManager');
+  private readonly machine: PeerMachine;
+
   private attachedMedia: MediaMachine | null = null;
   private pendingLocalStream: MediaStream | null = null;
   private mediaSubscriptions: Array<{ unsubscribe: () => void }> = [];
 
-  private connectionManager: ConnectionManager;
-  private callManager: CallManager;
-  private signalingService: SignalingService;
-  private readonly peer: Peer;
-
   constructor(input: { peer: Peer; maxRetries?: number; baseRetryDelay?: number }) {
-    super();
-
-    this.peer = input.peer;
     const maxRetries = input.maxRetries ?? 5;
     const baseRetryDelay = input.baseRetryDelay ?? 1000;
 
-    this.log.info('🔧 PeerManager created', { maxRetries, baseRetryDelay, peerId: input.peer.id });
+    this.machine = new PeerMachine(input.peer, maxRetries, baseRetryDelay);
+  }
 
-    const self = this;
+  // ── Delegated Machine API ──────────────────────────────────────────────────
 
-    const ctx = this.createContext<PeerContext>({
-      emit: (event) => this.emit(event),
-      notifyChange: () => this.notifySubscribers(),
-      bumpVersion: () => this.bumpVersion(),
-      get connectionManager() { return self.connectionManager; },
-      get callManager() { return self.callManager; },
-    });
+  /** Get the current peer state. */
+  getState(): PeerState {
+    return this.machine.getState();
+  }
 
-    this.signalingService = new SignalingService({
-      getConnection: (remotePeerId) => this.connectionManager.getOpenConnection(remotePeerId),
-      emit: (event) => this.emit(event),
-      notifyChange: () => this.notifySubscribers(),
-    });
+  /** Subscribe to any state changes. Returns an object with `unsubscribe()`. */
+  subscribe(cb: () => void): { unsubscribe: () => void } {
+    return this.machine.subscribe(cb);
+  }
 
-    this.connectionManager = new ConnectionManager(ctx, this.signalingService);
-    this.callManager = new CallManager(input.peer, ctx, this.signalingService, this.connectionManager);
+  /**
+   * Register a typed event handler for a specific event type.
+   * Returns an object with `unsubscribe()`.
+   */
+  on<T extends PeerEmittedEvent['type']>(
+    type: T,
+    handler: (event: Extract<PeerEmittedEvent, { type: T }>) => void,
+  ): { unsubscribe: () => void } {
+    return this.machine.on(type, handler);
+  }
 
-    this.currentState = new PeerInitializingState(input.peer, maxRetries, baseRetryDelay, ctx);
+  /** Register a transition listener. Called whenever the state changes. */
+  onTransition(listener: (next: PeerState, prev: PeerState) => void) {
+    return this.machine.onTransition(listener);
+  }
+
+  /** Get a versioned snapshot for `useSyncExternalStore()` compatibility. */
+  getSnapshot(): { state: PeerState; version: number } {
+    return this.machine.getSnapshot();
+  }
+
+  /** Get the current version counter. Incremented on every state change. */
+  getVersion(): number {
+    return this.machine.getVersion();
   }
 
   // ── Media Attachment ────────────────────────────────────────────────────────
@@ -145,7 +164,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     const state = this.requireReady(caller);
     if (!state) return null;
 
-    const coordinator = this.callManager.getCall(callId);
+    const coordinator = this.machine.callManager.getCall(callId);
     if (!coordinator) {
       this.log.warn(`${caller}() failed — call "${callId}" not found`);
       return null;
@@ -168,7 +187,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
    */
   connect(remotePeerId: string): void {
     const state = this.requireReady('connect');
-    if (state) this.connectionManager.connect(this.peer, remotePeerId);
+    if (state) this.machine.connectionManager.connect(this.machine.peer, remotePeerId);
   }
 
   /**
@@ -180,7 +199,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     if (!state) return false;
 
     // Find an open connection
-    const connState = this.connectionManager.getOpenConnection(remotePeerId);
+    const connState = this.machine.connectionManager.getOpenConnection(remotePeerId);
     if (connState) {
       connState.send(data);
       return true;
@@ -188,7 +207,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
 
     // No open connection — try to create one
     this.log.debug(`send() — no open connection to "${remotePeerId}", connecting...`);
-    this.connectionManager.connect(this.peer, remotePeerId);
+    this.machine.connectionManager.connect(this.machine.peer, remotePeerId);
     // Note: connection is async, so we can't send immediately.
     // The caller should listen for 'connection.opened' and then send.
     return false;
@@ -216,7 +235,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       return false;
     }
 
-    this.callManager.call(this.peer, remotePeerId, stream);
+    this.machine.callManager.call(this.machine.peer, remotePeerId, stream);
     return true;
   }
 
@@ -303,7 +322,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   private hasLiveCall(): boolean {
     const state = this.getState();
     if (state._tag !== 'ready') return false;
-    return this.callManager.hasLiveCall();
+    return this.machine.callManager.hasLiveCall();
   }
 
   /**
@@ -312,7 +331,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   private holdAllLiveCalls(): void {
     const state = this.getState();
     if (state._tag !== 'ready') return;
-    this.callManager.holdAllLiveCalls();
+    this.machine.callManager.holdAllLiveCalls();
   }
 
   // ── Query Methods (Immutable Snapshots) ─────────────────────────────────────
@@ -328,7 +347,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     let hasLive = false;
     let hasHeld = false;
 
-    for (const coordinator of this.callManager.getAll()) {
+    for (const coordinator of this.machine.callManager.getAll()) {
       const tag = coordinator.getStateTag();
       if (tag === 'live') hasLive = true;
       if (tag === 'held') hasHeld = true;
@@ -354,7 +373,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     }
 
     const calls: CallInfo[] = [];
-    for (const coordinator of this.callManager.getAll()) {
+    for (const coordinator of this.machine.callManager.getAll()) {
       calls.push(coordinator.getCallInfo());
     }
     return calls;
@@ -370,7 +389,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     }
 
     const connections: ConnectionInfo[] = [];
-    for (const machine of this.connectionManager.getAll()) {
+    for (const machine of this.machine.connectionManager.getAll()) {
       const connState = machine.getState();
       connections.push({
         connectionId: connState.connectionId,
@@ -390,7 +409,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     if (state._tag !== 'ready') {
       return null;
     }
-    return this.callManager.getCall(callId) ?? null;
+    return this.machine.callManager.getCall(callId) ?? null;
   }
 
   /**
@@ -402,15 +421,15 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     if (state._tag !== 'ready') {
       return null;
     }
-    return this.connectionManager.getConnection(connectionId) ?? null;
+    return this.machine.connectionManager.getConnection(connectionId) ?? null;
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
-  override destroy(): void {
+  destroy(): void {
     this.cleanupMediaSubscriptions();
     this.attachedMedia = null;
     this.pendingLocalStream = null;
-    super.destroy();
+    this.machine.destroy();
   }
 }

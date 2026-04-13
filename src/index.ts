@@ -22,7 +22,16 @@ export { PeerEvents, CallEvents, ConnectionEvents, MediaEvents } from './core/ev
 // ── Peer types ────────────────────────────────────────────────────────────────
 
 export type { PeerState } from './peer/state';
-export type { PeerEmittedEvent } from './peer/types';
+export type {
+  PeerEmittedEvent,
+  CallEvent,
+  ConnectionEvent,
+  PeerLifecycleEvent,
+  PeerCallApi,
+  PeerConnectionApi,
+  PeerMediaApi,
+  PeerQueryApi,
+} from './peer/types';
 
 // ── Media types ───────────────────────────────────────────────────────────────
 
