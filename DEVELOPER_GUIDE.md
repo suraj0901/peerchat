@@ -262,11 +262,13 @@ private callManager: CallManager;
 
 ## Machine Deep Dive
 
-### PeerManager
+### PeerMachine & PeerManager
 
-**File:** `src/peer/PeerManager.ts`
+**Files:** `src/peer/PeerMachine.ts` & `src/peer/PeerManager.ts`
 
-The top-level machine managing the PeerJS lifecycle. Child machines and data streams are delegated to `CallManager` and `ConnectionManager`.
+To respect the Single Responsibility Principle, the top-level peer management is split:
+- **`PeerMachine`**: A pure state machine that manages the PeerJS lifecycle (connecting, ready, disconnected)
+- **`PeerManager`**: A public-facing **facade** that delegates to `PeerMachine`, `CallManager`, and `ConnectionManager`. It implements focused ISP interfaces (`PeerCallApi`, `PeerConnectionApi`, etc.) rather than exposing an unbounded surface.
 
 #### States
 
@@ -448,7 +450,7 @@ Handles:
 - `call_held` — notify the remote peer that the local user put the call on hold
 - `call_resumed` — notify the remote peer that the local user resumed the call
 
-When a `call_held` message is received, the `CallCoordinator` triggers `remoteHeld()` on the `CallLiveState`, transitioning to `CallRemoteHeldState`. When `call_resumed` is received, `remoteResumed()` is called on `CallRemoteHeldState`, transitioning back to `CallLiveState`.
+When a signaling message like `call_held` is received, the `CallCoordinator` handles it cleanly using an **OCP-compliant handler map**. New signaling types can be added via map entries without mutating `if/else` logic. Received signals update the internal `CallMachine` states (e.g. transitioning to `CallRemoteHeldState` or closing the call).
 
 ---
 
@@ -465,8 +467,9 @@ peerchat/
 │   │   ├── machine.ts        # AbstractMachine base class
 │   │   ├── events.ts         # Event constants (PeerEvents, CallEvents, etc.)
 │   │   └── logger.ts         # Logging utility
-│   ├── peer/                 # PeerManager — top-level machine
-│   │   ├── PeerManager.ts    # PeerManager class with convenience methods
+│   ├── peer/                 # PeerManager facade + PeerMachine
+│   │   ├── PeerMachine.ts    # Pure state machine for peer lifecycle
+│   │   ├── PeerManager.ts    # Public facade implementing ISP interfaces
 │   │   ├── state.ts          # Peer state classes
 │   │   └── types.ts          # PeerEmittedEvent, type guards
 │   ├── call/                 # CallMachine, CallCoordinator

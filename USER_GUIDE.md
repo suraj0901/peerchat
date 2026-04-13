@@ -59,13 +59,17 @@ PeerChat is a library that simplifies WebRTC communication by wrapping [PeerJS](
 ### Architecture at a Glance
 
 ```
-┌─────────────┐     ┌──────────────┐
-│  PeerManager│────▶│ MediaMachine │
-│             │     │              │
-│ - calls     │     │ - stream     │
-│ - connections│    │ - devices    │
-│ - signaling │     │ - permissions│
-└─────────────┘     └──────────────┘
+┌───────────────────────┐
+│ PeerManager (Facade)  │
+│                       │
+│ ┌───────────────────┐ │     ┌──────────────┐
+│ │    PeerMachine    │ │────▶│ MediaMachine │
+│ │ - peer lifecycle  │ │     │              │
+│ └───────────────────┘ │     │ - stream     │
+│ - calls (Manager)     │     │ - devices    │
+│ - connections         │     │ - permissions│
+│ - signaling         │ │     └──────────────┘
+└───────────────────────┘
 ```
 
 Each component is an independent state machine that can be used alone or combined.
