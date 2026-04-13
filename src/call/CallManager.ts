@@ -30,7 +30,7 @@ export class CallManager {
   /** Check if there are any live calls */
   public hasLiveCall(): boolean {
     for (const coordinator of this.calls.values()) {
-      if (coordinator.callMachine.getState().is('live')) {
+      if (coordinator.isInState('live')) {
         return true;
       }
     }
@@ -43,9 +43,8 @@ export class CallManager {
 
     // Prevent duplicate
     for (const coordinator of this.calls.values()) {
-      const childState = coordinator.callMachine.getState();
-      if ((childState.is('ringing') || childState.is('connecting') || childState.is('live')) && childState.remotePeerId === remotePeerId) {
-        log.warn(`  → duplicate call to "${remotePeerId}" — skipping (existing state: ${childState._tag})`);
+      if (coordinator.isInState('ringing', 'connecting', 'live') && coordinator.getRemotePeerId() === remotePeerId) {
+        log.warn(`  → duplicate call to "${remotePeerId}" — skipping (existing state: ${coordinator.getStateTag()})`);
         return;
       }
     }
@@ -72,10 +71,9 @@ export class CallManager {
   /** Hold all currently live calls */
   public holdAllLiveCalls(): void {
     for (const [id, coordinator] of this.calls) {
-      const state = coordinator.callMachine.getState();
-      if (state.is('live')) {
+      if (coordinator.isInState('live')) {
         log.info(`  auto-holding live call "${id}"`);
-        state.hold();
+        coordinator.holdIfLive();
       }
     }
   }
@@ -134,7 +132,7 @@ export class CallManager {
     const heldCallIds: string[] = [];
 
     for (const [id, coord] of this.calls) {
-      const tag = coord.callMachine.getState()._tag;
+      const tag = coord.getStateTag();
       if (tag === 'live') hasLive = true;
       if (tag === 'held') heldCallIds.push(id);
     }

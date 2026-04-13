@@ -35,7 +35,7 @@ class TrackController {
   constructor(
     private readonly call: MediaConnection,
     private readonly remoteStream?: MediaStream,
-  ) {}
+  ) { }
 
   /**
    * Access the underlying RTCPeerConnection from PeerJS.
@@ -294,11 +294,11 @@ export abstract class BaseActiveCallState implements BaseCallState {
 
 export abstract class BaseTerminalCallState implements BaseCallState {
   public abstract readonly _tag: CallStateTag;
-  
+
   constructor(
     public readonly callId: string,
     public readonly remotePeerId: string,
-  ) {}
+  ) { }
 
   public destroy() { }
 

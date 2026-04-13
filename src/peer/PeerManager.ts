@@ -3,10 +3,10 @@ import { AbstractMachine } from '../core';
 import { createLogger } from '../core/logger';
 import { PeerInitializingState, PeerReadyState, type PeerContext, type PeerState } from './state';
 import type { PeerEmittedEvent } from './types';
-import type { CallInfo, CallEmittedEvent } from '../call/types';
+import type { CallInfo } from '../call/types';
 import type { CallState } from '../call/state';
 import type { ConnectionInfo } from '../connection/types';
-import type { CallMachine } from '../call/CallMachine';
+import type { CallCoordinator } from '../call/CallCoordinator';
 import type { ConnectionMachine } from '../connection/ConnectionMachine';
 import type { MediaMachine } from '../media/MediaManager';
 import { ConnectionManager } from '../connection/ConnectionManager';
@@ -151,7 +151,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
       return null;
     }
 
-    const callState = coordinator.callMachine.getState();
+    const callState = coordinator.getState();
     if (!expectedTags.includes(callState._tag as T)) {
       const expected = expectedTags.length === 1 ? `"${expectedTags[0]}"` : `one of [${expectedTags.join(', ')}]`;
       this.log.warn(`${caller}() failed — call "${callId}" state is "${callState._tag}", expected ${expected}`);
@@ -329,7 +329,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
     let hasHeld = false;
 
     for (const coordinator of this.callManager.getAll()) {
-      const tag = coordinator.callMachine.getState()._tag;
+      const tag = coordinator.getStateTag();
       if (tag === 'live') hasLive = true;
       if (tag === 'held') hasHeld = true;
     }
@@ -355,20 +355,7 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
 
     const calls: CallInfo[] = [];
     for (const coordinator of this.callManager.getAll()) {
-      const callState = coordinator.callMachine.getState();
-      const callId = callState.callId;
-      let direction: 'inbound' | 'outbound' = 'outbound';
-      if (callState._tag === 'ringing') {
-        direction = 'inbound';
-      } else if ('direction' in callState) {
-        direction = (callState as any).direction;
-      }
-      calls.push({
-        callId,
-        remotePeerId: callState.remotePeerId,
-        state: callState._tag,
-        direction,
-      });
+      calls.push(coordinator.getCallInfo());
     }
     return calls;
   }
@@ -395,16 +382,15 @@ export class PeerManager extends AbstractMachine<PeerState, PeerEmittedEvent> {
   }
 
   /**
-   * Get the CallMachine for a specific call, or null if not found.
-   * Use this for advanced access to the call's state machine.
+   * Get the CallCoordinator for a specific call, or null if not found.
+   * Use this for advanced access to the call's state and subscriptions.
    */
-  getCallMachine(callId: string): CallMachine | null {
+  getCallMachine(callId: string): CallCoordinator | null {
     const state = this.getState();
     if (state._tag !== 'ready') {
       return null;
     }
-    const coordinator = this.callManager.getCall(callId);
-    return coordinator?.callMachine ?? null;
+    return this.callManager.getCall(callId) ?? null;
   }
 
   /**

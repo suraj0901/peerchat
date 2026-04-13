@@ -1,6 +1,7 @@
 import type { MediaConnection } from 'peerjs';
 import { CallMachine } from './CallMachine';
-import type { CallDirection, CallState } from './state';
+import type { CallDirection, CallState, CallStateTag } from './state';
+import type { CallInfo } from './types';
 import { SignalingService } from '../signaling';
 import { ConnectionMachine } from '../connection/ConnectionMachine';
 import { createLogger } from '../core/logger';
@@ -34,10 +35,10 @@ export interface CallCoordinatorConfig {
 }
 
 export class CallCoordinator {
-  public readonly callMachine: CallMachine;
+  private readonly callMachine: CallMachine;
   private connection: ConnectionMachine | null = null;
-  private callId: string;
-  private remotePeerId: string;
+  private readonly _callId: string;
+  private readonly _remotePeerId: string;
   private readonly config: CallCoordinatorConfig;
 
   constructor(
@@ -45,9 +46,9 @@ export class CallCoordinator {
     callMachineFactory?: CallMachineFactory,
   ) {
     this.config = config;
-    this.callId = config.callId;
-    this.remotePeerId = config.remotePeerId;
-    log.info(`🔧 CallCoordinator created — ${config.direction} call "${this.callId}" with "${this.remotePeerId}"`);
+    this._callId = config.callId;
+    this._remotePeerId = config.remotePeerId;
+    log.info(`🔧 CallCoordinator created — ${config.direction} call "${this._callId}" with "${this._remotePeerId}"`);
 
     const defaultFactory: CallMachineFactory = {
       create: (cfg) => new CallMachine(
@@ -57,9 +58,9 @@ export class CallCoordinator {
         cfg.direction,
         (reason, callId) => {
           if (reason === 'rejected') {
-            config.signalingService.sendCallRejected(callId, this.remotePeerId);
+            config.signalingService.sendCallRejected(callId, this._remotePeerId);
           } else {
-            config.signalingService.sendCallDeclined(callId, this.remotePeerId);
+            config.signalingService.sendCallDeclined(callId, this._remotePeerId);
           }
         },
       ),
@@ -77,27 +78,89 @@ export class CallCoordinator {
     this.setupTransitionHandler();
   }
 
+  // ── Proxy Methods ───────────────────────────────────────────────────────────
+
+  /** Get the current call state tag (e.g., 'ringing', 'live', 'held'). */
+  public getStateTag(): CallStateTag {
+    return this.callMachine.getState()._tag;
+  }
+
+  /** Check if the call is in one of the given states. */
+  public isInState(...tags: CallStateTag[]): boolean {
+    return tags.includes(this.callMachine.getState()._tag);
+  }
+
+  /** Get an immutable snapshot of the call's essential information. */
+  public getCallInfo(): CallInfo {
+    const state = this.callMachine.getState();
+    let direction: 'inbound' | 'outbound' = 'outbound';
+    if (state._tag === 'ringing') {
+      direction = 'inbound';
+    } else if ('direction' in state) {
+      direction = (state as { direction: 'inbound' | 'outbound' }).direction;
+    }
+    return {
+      callId: state.callId,
+      remotePeerId: state.remotePeerId,
+      state: state._tag,
+      direction,
+    };
+  }
+
+  /** Get the call ID. */
+  public getCallId(): string {
+    return this._callId;
+  }
+
+  /** Get the remote peer ID. */
+  public getRemotePeerId(): string {
+    return this._remotePeerId;
+  }
+
+  /** Hold this call if it is currently live. No-op otherwise. */
+  public holdIfLive(): void {
+    const state = this.callMachine.getState();
+    if (state.is('live')) {
+      state.hold();
+    }
+  }
+
+  /** Get the current call state. Use for advanced/React consumers. */
+  public getState(): CallState {
+    return this.callMachine.getState();
+  }
+
+  /** Subscribe to state changes on the underlying machine. */
+  public subscribe(cb: () => void): { unsubscribe: () => void } {
+    return this.callMachine.subscribe(cb);
+  }
+
+  /** Register a transition listener. */
+  public onTransition(listener: (next: CallState, prev: CallState) => void) {
+    return this.callMachine.onTransition(listener);
+  }
+
   private setupParallelConnection() {
-    const existingConnection = this.config.getConnection(this.remotePeerId);
+    const existingConnection = this.config.getConnection(this._remotePeerId);
 
     const handleSignalingMessage = (message: { type: string; callId: string }, connectionId: string) => {
       if (message.type === 'remote_close') {
-        log.info(`  CallCoordinator[${this.callId}] received remote_close — closing call`);
-        this.config.onEnded(this.callId, { type: 'call.ended' });
+        log.info(`  CallCoordinator[${this._callId}] received remote_close — closing call`);
+        this.config.onEnded(this._callId, { type: 'call.ended' });
         return;
       }
       if (message.type === 'call_rejected') {
-        log.info(`  CallCoordinator[${this.callId}] received call_rejected`);
-        this.config.onEnded(this.callId, { type: 'call.rejected' });
+        log.info(`  CallCoordinator[${this._callId}] received call_rejected`);
+        this.config.onEnded(this._callId, { type: 'call.rejected' });
         return;
       }
       if (message.type === 'call_declined') {
-        log.info(`  CallCoordinator[${this.callId}] received call_declined`);
-        this.config.onEnded(this.callId, { type: 'call.declined' });
+        log.info(`  CallCoordinator[${this._callId}] received call_declined`);
+        this.config.onEnded(this._callId, { type: 'call.declined' });
         return;
       }
       if (message.type === 'call_held') {
-        log.info(`  CallCoordinator[${this.callId}] received call_held — remote put us on hold`);
+        log.info(`  CallCoordinator[${this._callId}] received call_held — remote put us on hold`);
         const callState = this.callMachine.getState();
         if (callState._tag === 'live') {
           callState.remoteHeld();
@@ -107,7 +170,7 @@ export class CallCoordinator {
         return;
       }
       if (message.type === 'call_resumed') {
-        log.info(`  CallCoordinator[${this.callId}] received call_resumed — remote resumed`);
+        log.info(`  CallCoordinator[${this._callId}] received call_resumed — remote resumed`);
         const callState = this.callMachine.getState();
         if (callState._tag === 'remoteHeld') {
           callState.remoteResumed();
@@ -118,47 +181,44 @@ export class CallCoordinator {
       }
     };
 
-    this.config.signalingService.registerHandler(this.callId, handleSignalingMessage);
+    this.config.signalingService.registerHandler(this._callId, handleSignalingMessage);
+
+    const onTerminalTransition = (state: CallState) => {
+      if (state._tag === 'ended' || state._tag === 'error') {
+        this.config.signalingService.unregisterHandler(this._callId);
+        this.cleanupAfterCall();
+      }
+    };
 
     if (!existingConnection) {
-      log.debug(`  no existing connection to "${this.remotePeerId}" — opening parallel connection`);
-      this.config.openConnection(this.remotePeerId);
-      this.callMachine.onTransition((state) => {
-        if (state._tag === 'ended' || state._tag === 'error') {
-          this.config.signalingService.unregisterHandler(this.callId);
-          this.cleanupAfterCall();
-        }
-      });
+      log.debug(`  no existing connection to "${this._remotePeerId}" — opening parallel connection`);
+      this.config.openConnection(this._remotePeerId);
+      this.callMachine.onTransition(onTerminalTransition);
     } else {
       this.connection = existingConnection;
-      this.callMachine.onTransition((state) => {
-        if (state._tag === 'ended' || state._tag === 'error') {
-          this.config.signalingService.unregisterHandler(this.callId);
-          this.cleanupAfterCall();
-        }
-      });
+      this.callMachine.onTransition(onTerminalTransition);
     }
   }
 
   private setupTransitionHandler() {
     this.callMachine.onTransition((next, prev) => {
-      log.info(`  CallCoordinator[${this.callId}] call transition: ${prev._tag} → ${next._tag}`);
+      log.info(`  CallCoordinator[${this._callId}] call transition: ${prev._tag} → ${next._tag}`);
 
       // Live call established
       if (next._tag === 'live' && prev._tag === 'connecting') {
-        this.config.onActive(this.callId, next.remoteStream);
+        this.config.onActive(this._callId, next.remoteStream);
       }
 
       // Local hold: live → held
       if (next._tag === 'held' && prev._tag === 'live') {
-        this.config.signalingService.sendCallHeld(this.callId, this.remotePeerId);
-        this.config.onHeld(this.callId);
+        this.config.signalingService.sendCallHeld(this._callId, this._remotePeerId);
+        this.config.onHeld(this._callId);
       }
 
       // Local resume: held → live
       if (next._tag === 'live' && prev._tag === 'held') {
-        this.config.signalingService.sendCallResumed(this.callId, this.remotePeerId);
-        this.config.onResumed(this.callId, next.remoteStream);
+        this.config.signalingService.sendCallResumed(this._callId, this._remotePeerId);
+        this.config.onResumed(this._callId, next.remoteStream);
       }
 
       // Remote hold: live → remoteHeld (signaling handled in setupParallelConnection)
@@ -166,11 +226,11 @@ export class CallCoordinator {
 
       // Terminal states
       if (next._tag === 'ended') {
-        this.config.onEnded(this.callId, { type: 'call.ended' });
+        this.config.onEnded(this._callId, { type: 'call.ended' });
         return;
       }
       if (next._tag === 'error') {
-        this.config.onEnded(this.callId, { type: 'call.error', error: next.error });
+        this.config.onEnded(this._callId, { type: 'call.error', error: next.error });
         return;
       }
 
@@ -187,8 +247,8 @@ export class CallCoordinator {
   }
 
   public destroy() {
-    log.info(`💀 CallCoordinator[${this.callId}].destroy()`);
-    this.config.signalingService.unregisterHandler(this.callId);
+    log.info(`💀 CallCoordinator[${this._callId}].destroy()`);
+    this.config.signalingService.unregisterHandler(this._callId);
     this.cleanupAfterCall();
     this.callMachine.destroy();
   }
